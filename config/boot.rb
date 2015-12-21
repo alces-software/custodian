@@ -42,12 +42,15 @@ Custodian.public_ip = ENV['ALCES_PUBLIC_IP']
 Custodian.aws_zone_id = ENV['ALCES_AWS_ZONE_ID']
 Custodian.aws_access_key = ENV['ALCES_AWS_ACCESS_KEY']
 Custodian.aws_secret_key = ENV['ALCES_AWS_SECRET_KEY']
+Custodian.account_key_bucket = ENV['ALCES_ACCOUNT_KEY_BUCKET']
+Custodian.account_key_object_key = ENV['ALCES_ACCOUNT_KEY_OBJECT_KEY']
 
 keyfile = File.expand_path("../account.pem", here)
 if File.exists?(keyfile)
   Custodian.private_key = OpenSSL::PKey::RSA.new(File.read(keyfile))
 else
-  if Custodian.generate_key
+  # attempt to retrieve from S3
+  if Custodian.fetch_key || Custodian.generate_key
     File.write(keyfile, Custodian.private_key.to_pem)
   end
 end

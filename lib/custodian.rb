@@ -38,12 +38,21 @@ module Custodian
 
   class << self
     attr_accessor :root, :public_ip, :private_key,
-                  :aws_access_key, :aws_secret_key, :aws_zone_id
+                  :aws_access_key, :aws_secret_key, :aws_zone_id,
+                  :account_key_bucket, :account_key_object_key
 
     def acme_client
       @acme_client ||= Acme::Client.new(private_key: private_key, endpoint: ENDPOINT)
     end
 
+    def s3_client
+      @s3_client ||= Aws::S3::Client.new(
+        access_key_id: aws_access_key,
+        secret_access_key: aws_secret_key,
+        region: 'eu-west-1'
+      )
+    end
+    
     def route53_client
       @route53_client ||= Aws::Route53::Client.new(
         access_key_id: aws_access_key,
@@ -53,8 +62,15 @@ module Custodian
     
     def generate_key
       self.private_key = OpenSSL::PKey::RSA.new(2048)
-      registration = acme_client.register(contact: 'mailto:mark.titorenko@alces-software.com')
+      registration = acme_client.register(contact: 'mailto:certmaster@alces-software.com')
       registration.agree_terms
+    end
+
+    def fetch_key
+      self.private_key = OpenSSL::PKey::RSA.new(
+        s3_client.get_object(bucket: account_key_bucket,
+                             key: account_key_object_key)
+        .body.read)
     end
   end
 end

@@ -1,0 +1,5 @@
+config/account.pem
+.env
+vendor/ruby
+.bundle
+bin

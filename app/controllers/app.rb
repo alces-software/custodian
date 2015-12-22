@@ -48,14 +48,15 @@ module Custodian
       name = @params['name']
       alts = @params['alts'] || []
       ip = @params['ip']
+      secret = @params['secret']
 
       resolved_ip = Custodian::DNS.resolve(name)
       if !resolved_ip.nil?
-        Custodian::DNS.clear(name, resolved_ip)
+        Custodian::DNS.clear(name, resolved_ip, secret)
       end
       
       cert_data = Custodian::Certificate.issue(name, alts)
-      Custodian::DNS.set(name, ip)
+      Custodian::DNS.set(name, ip, secret)
       {
         cert: cert_data.cert,
         key: cert_data.key,

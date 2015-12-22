@@ -32,7 +32,7 @@ require 'resolv'
 module Custodian
   module DNS
     class << self
-      def record_set(operation, name, ip)
+      def record_set(operation, name, ip, secret)
           {
             hosted_zone_id: Custodian.aws_zone_id,
             change_batch: {
@@ -45,7 +45,7 @@ module Custodian
                     type: "A",
                     ttl: 60,
                     weight: 0,
-                    set_identifier: "${cw_NAMING_secret}",
+                    set_identifier: "#{secret}",
                     resource_records: [
                       {value: "#{ip}"}
                     ]
@@ -56,15 +56,15 @@ module Custodian
           }
       end
       
-      def set(name, ip)
+      def set(name, ip, secret)
         Custodian.route53_client.change_resource_record_sets(
-          record_set('UPSERT', name, ip)
+          record_set('UPSERT', name, ip, secret)
         )
       end
 
-      def clear(name, ip)
+      def clear(name, ip, secret)
         Custodian.route53_client.change_resource_record_sets(
-          record_set('DELETE', name, ip)
+          record_set('DELETE', name, ip, secret)
         )
       rescue Aws::Route53::Errors::InvalidChangeBatch
         STDERR.puts "Unable to DELETE: #{$!.message}"

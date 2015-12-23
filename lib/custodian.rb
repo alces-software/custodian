@@ -33,7 +33,11 @@ require 'acme/client'
 require 'aws-sdk'
 
 module Custodian
-  ENDPOINT = 'https://acme-v01.api.letsencrypt.org/'
+  ENDPOINT = if ENV['ALCES_LETSENCRYPT_ENV'] == 'staging'
+               'https://acme-staging.api.letsencrypt.org/'
+             else
+               'https://acme-v01.api.letsencrypt.org/'
+             end
   Aws.config[:region] = 'us-east-1'
 
   class << self

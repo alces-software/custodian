@@ -44,6 +44,7 @@ Custodian.aws_access_key = ENV['ALCES_AWS_ACCESS_KEY']
 Custodian.aws_secret_key = ENV['ALCES_AWS_SECRET_KEY']
 Custodian.account_key_bucket = ENV['ALCES_ACCOUNT_KEY_BUCKET']
 Custodian.account_key_object_key = ENV['ALCES_ACCOUNT_KEY_OBJECT_KEY']
+Custodian.naming_secret = ENV['ALCES_NAMING_SECRET']
 
 keyfile = File.expand_path("../account.pem", here)
 if File.exists?(keyfile)

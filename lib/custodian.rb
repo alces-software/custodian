@@ -31,6 +31,7 @@ require 'openssl'
 require 'acme-client'
 require 'acme/client'
 require 'aws-sdk'
+require 'digest'
 
 module Custodian
   ENDPOINT = if ENV['ALCES_LETSENCRYPT_ENV'] == 'staging'
@@ -43,7 +44,8 @@ module Custodian
   class << self
     attr_accessor :root, :public_ip, :private_key,
                   :aws_access_key, :aws_secret_key, :aws_zone_id,
-                  :account_key_bucket, :account_key_object_key
+                  :account_key_bucket, :account_key_object_key,
+                  :naming_secret
 
     def acme_client
       @acme_client ||= Acme::Client.new(private_key: private_key, endpoint: ENDPOINT)
@@ -75,6 +77,10 @@ module Custodian
         s3_client.get_object(bucket: account_key_bucket,
                              key: account_key_object_key)
         .body.read)
+    end
+
+    def verified?(name, k, s)
+      k == Digest::MD5.hexdigest("#{name}:#{s}:#{naming_secret}")
     end
   end
 end

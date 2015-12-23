@@ -49,19 +49,24 @@ module Custodian
       alts = @params['alts'] || []
       ip = @params['ip']
       secret = @params['secret']
+      k = @params['k']
+      s = @params['s']
+      if Custodian.verified?(name, k, s)
+        resolved_ip = Custodian::DNS.resolve(name)
+        if !resolved_ip.nil?
+          Custodian::DNS.clear(name, resolved_ip, secret)
+        end
 
-      resolved_ip = Custodian::DNS.resolve(name)
-      if !resolved_ip.nil?
-        Custodian::DNS.clear(name, resolved_ip, secret)
+        cert_data = Custodian::Certificate.issue(name, alts)
+        Custodian::DNS.set(name, ip, secret)
+        {
+          cert: cert_data.cert,
+          key: cert_data.key,
+          fullchain: cert_data.fullchain
+        }.to_json
+      else
+        status 403
       end
-      
-      cert_data = Custodian::Certificate.issue(name, alts)
-      Custodian::DNS.set(name, ip, secret)
-      {
-        cert: cert_data.cert,
-        key: cert_data.key,
-        fullchain: cert_data.fullchain
-      }.to_json
     end
 
     get '/.well-known/acme-challenge/:token' do

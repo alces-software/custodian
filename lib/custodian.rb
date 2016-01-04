@@ -77,6 +77,8 @@ module Custodian
         s3_client.get_object(bucket: account_key_bucket,
                              key: account_key_object_key)
         .body.read)
+    rescue Aws::S3::Errors::ServiceError
+      nil
     end
 
     def verified?(name, k, s)

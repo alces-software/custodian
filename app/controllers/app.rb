@@ -54,7 +54,13 @@ module Custodian
       if Custodian.verified?(name, k, s)
         resolved_ip = Custodian::DNS.resolve(name)
         if !resolved_ip.nil?
-          Custodian::DNS.clear(name, resolved_ip, secret)
+          if Custodian::DNS.clear(name, resolved_ip, secret)
+            Custodian::DNS.await_unresolvable(name)
+          else
+            STDERR.puts "Unable to clear existing IP (#{resolved_ip}) for #{name}"
+            status 403
+            return
+          end
         end
 
         cert_data = Custodian::Certificate.issue(name, alts)

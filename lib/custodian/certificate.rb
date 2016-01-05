@@ -56,7 +56,7 @@ module Custodian
           unless Custodian.public_ip.nil?
             DNS.clear(name, Custodian.public_ip)
           end
-          raise "Unable to authorize name"
+          raise "Challenge for #{name} was unsuccessful"
         end
       end
 

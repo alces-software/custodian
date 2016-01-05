@@ -68,7 +68,7 @@ module Custodian
         )
       rescue Aws::Route53::Errors::InvalidChangeBatch
         STDERR.puts "Unable to DELETE: #{$!.message}"
-        true
+        false
       end
 
       def resolve(name)
@@ -90,12 +90,23 @@ module Custodian
       end
       
       def await(name, expected_ip = nil)
+        await(name,
+              ->(addr) { !addr.nil? && (expected_ip.nil? || addr == expected_ip) },
+              "Waiting for #{name} to have expected IP of #{expected_ip}")
+      end
+
+      def await_unresolvable(name)
+        await(name,
+              ->(addr) { addr.nil? },
+              "Waiting for #{name} to lose A record")
+      end
+
+      def await(name, condition, message)
         loop do
           resolved_ip = resolve(name)
-          if !resolved_ip.nil? && (expected_ip.nil? || resolved_ip == expected_ip)
-            break
-          end
-          STDERR.puts 'waiting...'
+          STDERR.puts "Resolved #{name} to #{resolved_ip.nil? ? '<none>' : resolved_ip}"
+          break if condition.call(resolved_ip)
+          STDERR.puts message
           sleep 5
         end
       end

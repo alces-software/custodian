@@ -72,7 +72,15 @@ module Custodian
       end
 
       def resolve(name)
-        Resolv.getaddress("#{name}.cloud.compute.estate")
+        fqdn = "#{name}.cloud.compute.estate"
+        Resolv::DNS.open do |r|
+          # check if we're resolving the wildcard (which is a CNAME)
+          if r.getresources(fqdn, Resolv::DNS::Resource::IN::CNAME).empty?
+            # we're not resolving the wildcard, so let's get the
+            # existing A record.
+            r.getresource(fqdn, Resolv::DNS::Resource::IN::A).address.to_s
+          end
+        end
       rescue Resolv::ResolvError
         nil
       end

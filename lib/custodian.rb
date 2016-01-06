@@ -45,7 +45,7 @@ module Custodian
     attr_accessor :root, :public_ip, :private_key,
                   :aws_access_key, :aws_secret_key, :aws_zone_id,
                   :account_key_bucket, :account_key_object_key,
-                  :naming_secret
+                  :naming_secret, :dns_ttl, :dns_domain_name
 
     def acme_client
       @acme_client ||= Acme::Client.new(private_key: private_key, endpoint: ENDPOINT)

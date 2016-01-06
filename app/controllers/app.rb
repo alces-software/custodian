@@ -55,21 +55,31 @@ module Custodian
         resolved_ip = Custodian::DNS.resolve(name)
         if !resolved_ip.nil?
           if Custodian::DNS.clear(name, resolved_ip, secret)
-            Custodian::DNS.await_unresolvable(name)
+            # Given the TTL on the DNS, this challenge will not work
+            # until the name loses its A record and falls back to the
+            # CNAME for Custodian.  We indicate this to the client by
+            # returning an appropriate JSON payload.
+            {
+              retry: Custodian.dns_ttl
+            }.to_json
           else
             STDERR.puts "Unable to clear existing IP (#{resolved_ip}) for #{name}"
             status 403
-            return
+          end
+        else
+          cert_data = Custodian::Certificate.issue(name, alts)
+          Custodian::DNS.set(name, ip, secret)
+          if cert_data.nil?
+            STDERR.puts "Unable to issue certificate for #{name}"
+            status 403
+          else
+            {
+              cert: cert_data.cert,
+              key: cert_data.key,
+              fullchain: cert_data.fullchain
+            }.to_json
           end
         end
-
-        cert_data = Custodian::Certificate.issue(name, alts)
-        Custodian::DNS.set(name, ip, secret)
-        {
-          cert: cert_data.cert,
-          key: cert_data.key,
-          fullchain: cert_data.fullchain
-        }.to_json
       else
         status 403
       end

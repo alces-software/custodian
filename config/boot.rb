@@ -45,6 +45,8 @@ Custodian.aws_secret_key = ENV['ALCES_AWS_SECRET_KEY']
 Custodian.account_key_bucket = ENV['ALCES_ACCOUNT_KEY_BUCKET']
 Custodian.account_key_object_key = ENV['ALCES_ACCOUNT_KEY_OBJECT_KEY']
 Custodian.naming_secret = ENV['ALCES_NAMING_SECRET']
+Custodian.dns_ttl = ENV['ALCES_DNS_TTL'] || 60
+Custodian.dns_domain_name = ENV['ALCES_DNS_DOMAIN_NAME'] || 'cloud.compute.estate'
 
 keyfile = File.expand_path("../account.pem", here)
 if File.exists?(keyfile)

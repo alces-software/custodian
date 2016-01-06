@@ -46,7 +46,7 @@ module Custodian
         end
         
         if authorize(name)
-          csr = Acme::CertificateRequest.new(names: ["#{name}.cloud.compute.estate"].concat(alts))
+          csr = Acme::CertificateRequest.new(names: ["#{name}.#{Custodian.dns_domain_name}"].concat(alts))
           certificate = Custodian.acme_client.new_certificate(csr)
           Certificate.new(key: certificate.request.private_key.to_pem,
                           cert: certificate.to_pem,
@@ -56,12 +56,11 @@ module Custodian
           unless Custodian.public_ip.nil?
             DNS.clear(name, Custodian.public_ip)
           end
-          raise "Challenge for #{name} was unsuccessful"
         end
       end
 
       def authorize(name)
-        authorization = Custodian.acme_client.authorize(domain: "#{name}.cloud.compute.estate")
+        authorization = Custodian.acme_client.authorize(domain: "#{name}.#{Custodian.dns_domain_name}")
         challenge = authorization.http01
         Challenges.setup(challenge) do
           if challenge.request_verification

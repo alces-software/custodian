@@ -41,9 +41,9 @@ module Custodian
                 {
                   action: operation,
                   resource_record_set: {
-                    name: "#{name}.cloud.compute.estate",
+                    name: "#{name}.#{Custodian.dns_domain_name}",
                     type: "A",
-                    ttl: 60,
+                    ttl: Custodian.dns_ttl,
                     weight: 0,
                     set_identifier: "#{secret}",
                     resource_records: [
@@ -57,12 +57,14 @@ module Custodian
       end
       
       def set(name, ip, secret)
+        STDERR.puts "Setting DNS record #{name} -> #{ip} (#{secret})"
         Custodian.route53_client.change_resource_record_sets(
           record_set('UPSERT', name, ip, secret)
         )
       end
 
       def clear(name, ip, secret)
+        STDERR.puts "Clearing DNS record #{name} -> #{ip} (#{secret})"
         Custodian.route53_client.change_resource_record_sets(
           record_set('DELETE', name, ip, secret)
         )
@@ -72,7 +74,8 @@ module Custodian
       end
 
       def resolve(name)
-        fqdn = "#{name}.cloud.compute.estate"
+        STDERR.puts "Resolving DNS record for #{name}"
+        fqdn = "#{name}.#{Custodian.dns_domain_name}"
         Resolv::DNS.open do |r|
           # check if we're resolving the wildcard (which is a CNAME)
           if r.getresources(fqdn, Resolv::DNS::Resource::IN::CNAME).empty?

@@ -60,7 +60,18 @@ module Custodian
       end
 
       def authorize(name)
-        authorization = Custodian.acme_client.authorize(domain: "#{name}.#{Custodian.dns_domain_name}")
+        attempts = 0
+        begin
+          authorization = Custodian.acme_client.authorize(domain: "#{name}.#{Custodian.dns_domain_name}")
+        rescue Acme::Client::Error
+          if (attempts += 1) > 10
+            raise
+          else
+            STDERR.puts "Failed to authorize (#{$!.message}); will retry (#{attempts}/10)"
+            sleep 0.5
+            retry
+          end
+        end
         challenge = authorization.http01
         Challenges.setup(challenge) do
           if challenge.request_verification

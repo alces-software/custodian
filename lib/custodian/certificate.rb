@@ -46,7 +46,7 @@ module Custodian
         end
         
         if authorize(name)
-          csr = Acme::CertificateRequest.new(names: ["#{name}.#{Custodian.dns_domain_name}"].concat(alts))
+          csr = Acme::Client::CertificateRequest.new(names: ["#{name}.#{Custodian.dns_domain_name}"].concat(alts))
           certificate = Custodian.acme_client.new_certificate(csr)
           Certificate.new(key: certificate.request.private_key.to_pem,
                           cert: certificate.to_pem,

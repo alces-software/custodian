@@ -84,5 +84,24 @@ module Custodian
     def verified?(name, k, s)
       k == Digest::MD5.hexdigest("#{name}:#{s}:#{naming_secret}")
     end
+
+    72_HOURS = 72 * 60 * 60
+
+    def reap
+      [].tap do |reaped|
+        # iterate over existing records, reap any that haven't been
+        # updated for more than 72 hours.
+        DNS.each_record do |r|
+          if r[:metadata].key?('ctime')
+            ctime = Time.at(metadata['ctime'].to_i)
+            if Time.now - ctime >= 72_HOURS
+              if DNS.clear(r[:name], r[:ip], r[:secret])
+                reaped << r[:name]
+              end
+            end
+          end
+        end
+      end
+    end
   end
 end

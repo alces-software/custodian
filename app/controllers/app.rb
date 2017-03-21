@@ -92,5 +92,14 @@ module Custodian
         status 404
       end
     end
+
+    get '/reap' do
+      reaped = Custodian.reap
+      if reaped.any?
+        reaped.join("\n")
+      else
+        "No domains reaped."
+      end
+    end
   end
 end

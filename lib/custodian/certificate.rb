@@ -41,7 +41,7 @@ module Custodian
     class << self
       def issue(name, alts)
         unless Custodian.public_ip.nil?
-          DNS.set(name, Custodian.public_ip)
+          DNS.set(name, Custodian.public_ip, "")
           DNS.await(name, Custodian.public_ip)
         end
         
@@ -54,7 +54,7 @@ module Custodian
                           fullchain: certificate.fullchain_to_pem)
         else
           unless Custodian.public_ip.nil?
-            DNS.clear(name, Custodian.public_ip)
+            DNS.clear(name, Custodian.public_ip, "")
           end
         end
       end
@@ -83,6 +83,12 @@ module Custodian
             false
           end
         end
+      end
+
+      def revoke(cert, name, ip, secret)
+        Custodian.acme_client.revoke_certificate(cert)
+        DNS.clear(name, ip, secret)
+        DNS.await(name, Custodian.public_ip)
       end
     end
   end

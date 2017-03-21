@@ -28,6 +28,7 @@
 # For more information, please visit <http://www.alces-software.com/>.
 #==============================================================================
 require 'resolv'
+require 'json'
 
 module Custodian
   module DNS
@@ -51,7 +52,28 @@ module Custodian
                     ]
                   }
                 }
-              ]
+              ].tap do |a|
+                if operation == 'DELETE'
+                  domain_metadata = metadata("#{name}.#{Custodian.dns_domain_name}")
+                else
+                  domain_metadata = {ctime: Time.now.to_i}.to_json
+                end
+                if domain_metadata
+                  a << {
+                    action: operation,
+                    resource_record_set: {
+                      name: "#{name}.#{Custodian.dns_domain_name}",
+                      type: "TXT",
+                      ttl: Custodian.dns_ttl,
+                      weight: 0,
+                      set_identifier: "#{secret}",
+                      resource_records: [
+                        {value: domain_metadata}
+                      ]
+                    }
+                  }
+                end
+              end
             }
           }
       end
@@ -87,6 +109,17 @@ module Custodian
       rescue Resolv::ResolvError
         nil
       end
+
+      def metadata(name)
+        STDERR.puts "Resolving metadata DNS record for #{name}"
+        fqdn = "#{name}.#{Custodian.dns_domain_name}"
+        Resolv::DNS.open do |r|
+          # check if we're resolving the wildcard (which is a CNAME)
+          r.getresource(fqdn, Resolv::DNS::Resource::IN::TXT).data
+        end
+      rescue Resolv::ResolvError
+        nil
+      end
       
       def exists?(name)
         !resolve(name).nil?
@@ -112,6 +145,41 @@ module Custodian
           STDERR.puts message
           sleep 5
         end
+      end
+
+      def each_record(&block)
+        read_records.values.each(&block)
+      end
+
+      private
+      def read_records(records = {}, opts = {})
+        resp = Custodian.route53_client.list_resource_record_sets(
+          opts.merge(hosted_zone_id: Custodian.aws_zone_id)
+        )
+        resp.resource_record_sets.each do |rs|
+          r.resource_records.each do |rr|
+            record = records[rs.name] ||= {
+              name: rs.name,
+              secret: rs.set_identifier
+            }
+            if rs.type == 'TXT'
+              record[:metadata] = JSON.parse(rr.value) rescue {}
+            elsif rs.type == 'A'
+              record[:ip] = rr.value
+            end
+          end
+        end
+        if resp.is_truncated
+          read_records(
+            records,
+            {
+              start_record_name: resp.next_record_name,
+              start_record_type: resp.next_record_type,
+              start_record_identifier: resp.next_record_identifier
+            }
+          )
+        end
+        records
       end
     end
   end

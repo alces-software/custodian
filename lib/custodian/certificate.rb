@@ -1,5 +1,5 @@
 #==============================================================================
-# Copyright (C) 2015 Stephen F Norledge & Alces Software Ltd.
+# Copyright (C) 2015-2017 Stephen F Norledge & Alces Software Ltd.
 #
 # This file is part of Alces Custodian.
 #
@@ -27,8 +27,12 @@
 #
 # For more information, please visit <http://www.alces-software.com/>.
 #==============================================================================
+require 'securerandom'
+
 module Custodian
   class Certificate
+    DEFAULT_SECRET = SecureRandom.hex
+    
     attr_accessor :key, :cert, :chain, :fullchain
     
     def initialize(key:, cert:, chain:, fullchain:)
@@ -41,8 +45,8 @@ module Custodian
     class << self
       def issue(name, alts)
         unless Custodian.public_ip.nil?
-          DNS.set(name, Custodian.public_ip, "")
-          DNS.await(name, Custodian.public_ip)
+          DNS.set(name, Custodian.public_ip, DEFAULT_SECRET)
+          DNS.await_resolvable(name, Custodian.public_ip)
         end
         
         if authorize(name)
@@ -52,10 +56,10 @@ module Custodian
                           cert: certificate.to_pem,
                           chain: certificate.chain_to_pem,
                           fullchain: certificate.fullchain_to_pem)
-        else
-          unless Custodian.public_ip.nil?
-            DNS.clear(name, Custodian.public_ip, "")
-          end
+        end
+      ensure
+        unless Custodian.public_ip.nil?
+          DNS.clear(name, Custodian.public_ip, DEFAULT_SECRET)
         end
       end
 
@@ -88,7 +92,7 @@ module Custodian
       def revoke(cert, name, ip, secret)
         Custodian.acme_client.revoke_certificate(cert)
         DNS.clear(name, ip, secret)
-        DNS.await(name, Custodian.public_ip)
+        DNS.await_unresolvable(name)
       end
     end
   end

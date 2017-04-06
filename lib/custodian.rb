@@ -1,5 +1,5 @@
 #==============================================================================
-# Copyright (C) 2015 Stephen F Norledge & Alces Software Ltd.
+# Copyright (C) 2015-2017 Stephen F Norledge & Alces Software Ltd.
 #
 # This file is part of Alces Custodian.
 #
@@ -39,6 +39,9 @@ module Custodian
              else
                'https://acme-v01.api.letsencrypt.org/'
              end
+  DAYS_90 = 90 * 24 * 60 * 60
+  DAYS_3 = 3 * 24 * 60 * 60
+
   Aws.config[:region] = 'us-east-1'
 
   class << self
@@ -85,21 +88,25 @@ module Custodian
       k == Digest::MD5.hexdigest("#{name}:#{s}:#{naming_secret}")
     end
 
-    72_HOURS = 72 * 60 * 60
-
     def reap
-      [].tap do |reaped|
-        # iterate over existing records, reap any that haven't been
-        # updated for more than 72 hours.
-        DNS.each_record do |r|
+      candidates = []
+      # iterate over existing records, mark any that haven't been
+      # updated for more than 3 days or have existed for more than 90 days.
+      DNS.each_record do |r|
+        if r[:metadata]
           if r[:metadata].key?('ctime')
-            ctime = Time.at(metadata['ctime'].to_i)
-            if Time.now - ctime >= 72_HOURS
-              if DNS.clear(r[:name], r[:ip], r[:secret])
-                reaped << r[:name]
-              end
-            end
+            ctime = Time.at(r[:metadata]['ctime'].to_i)
+            candidates << r if Time.now - ctime >= DAYS_90
+          elsif r[:metadata].key?('mtime')
+            mtime = Time.at(r[:metadata]['mtime'].to_i)
+            candidates << r if Time.now - mtime >= DAYS_3
           end
+        end
+      end
+
+      [].tap do |reaped|
+        candidates.each do |r|
+          reaped << r[:name] if DNS.clear(r[:name], r[:ip], r[:secret])
         end
       end
     end

@@ -1,5 +1,5 @@
 #==============================================================================
-# Copyright (C) 2015 Stephen F Norledge & Alces Software Ltd.
+# Copyright (C) 2015-2017 Stephen F Norledge & Alces Software Ltd.
 #
 # This file is part of Alces Custodian.
 #
@@ -54,7 +54,7 @@ module Custodian
                 }
               ].tap do |a|
                 if operation == 'DELETE'
-                  domain_metadata = metadata("#{name}.#{Custodian.dns_domain_name}")
+                  domain_metadata = metadata("#{name}")
                 else
                   domain_metadata = {ctime: Time.now.to_i}.to_json
                 end
@@ -68,7 +68,7 @@ module Custodian
                       weight: 0,
                       set_identifier: "#{secret}",
                       resource_records: [
-                        {value: domain_metadata}
+                        {value: %("#{domain_metadata.gsub('"','\"')}")}
                       ]
                     }
                   }
@@ -125,7 +125,7 @@ module Custodian
         !resolve(name).nil?
       end
       
-      def await(name, expected_ip = nil)
+      def await_resolvable(name, expected_ip = nil)
         await(name,
               ->(addr) { !addr.nil? && (expected_ip.nil? || addr == expected_ip) },
               "Waiting for #{name} to have expected IP of #{expected_ip}")
@@ -157,13 +157,13 @@ module Custodian
           opts.merge(hosted_zone_id: Custodian.aws_zone_id)
         )
         resp.resource_record_sets.each do |rs|
-          r.resource_records.each do |rr|
+          rs.resource_records.each do |rr|
             record = records[rs.name] ||= {
-              name: rs.name,
+              name: rs.name.chomp(".#{Custodian.dns_domain_name}."),
               secret: rs.set_identifier
             }
             if rs.type == 'TXT'
-              record[:metadata] = JSON.parse(rr.value) rescue {}
+              record[:metadata] = JSON.parse(rr.value[1..-2].gsub('\"','"')) rescue {}
             elsif rs.type == 'A'
               record[:ip] = rr.value
             end

@@ -51,6 +51,7 @@ module Custodian
       secret = @params['secret']
       k = @params['k']
       s = @params['s']
+      meta = @params['meta']
       if Custodian.verified?(name, k, s)
         resolved_ip = Custodian::DNS.resolve(name)
         if !resolved_ip.nil?
@@ -68,7 +69,7 @@ module Custodian
           end
         else
           cert_data = Custodian::Certificate.issue(name, alts)
-          Custodian::DNS.set(name, ip, secret)
+          Custodian::DNS.set(name, ip, meta, secret)
           if cert_data.nil?
             STDERR.puts "Unable to issue certificate for #{name}"
             status 403
@@ -107,8 +108,9 @@ module Custodian
       secret = @params['secret']
       k = @params['k']
       s = @params['s']
+      meta = @params['meta']
       if Custodian.verified?(name, k, s)
-        if Custodian::DNS.ping(name, secret)
+        if Custodian::DNS.ping(name, meta, secret)
           "pong: #{name}"
         else
           status 404

@@ -33,10 +33,11 @@ require 'json'
 module Custodian
   module DNS
     class << self
-      def ping_record_set(name, secret)
+      def ping_record_set(name, meta, secret)
         domain_metadata = (JSON.parse(metadata("#{name}").gsub('\"','"')) rescue nil)
         if domain_metadata
           domain_metadata['mtime'] = Time.now.to_i
+          domain_metadata['meta'] = meta if meta
           {
             hosted_zone_id: Custodian.aws_zone_id,
             change_batch: {
@@ -61,7 +62,7 @@ module Custodian
         end
       end
 
-      def record_set(operation, name, ip, secret)
+      def record_set(operation, name, ip, meta, secret)
           {
             hosted_zone_id: Custodian.aws_zone_id,
             change_batch: {
@@ -84,7 +85,9 @@ module Custodian
                 if operation == 'DELETE'
                   domain_metadata = metadata("#{name}")
                 else
-                  domain_metadata = {ctime: Time.now.to_i}.to_json
+                  domain_metadata = {ctime: Time.now.to_i}.tap do |h|
+                    h[:meta] = meta if meta
+                  end.to_json
                 end
                 if domain_metadata
                   a << {
@@ -106,16 +109,16 @@ module Custodian
           }
       end
 
-      def set(name, ip, secret)
+      def set(name, ip, meta, secret)
         STDERR.puts "Setting DNS records for #{name} -> #{ip} (#{secret})"
         Custodian.route53_client.change_resource_record_sets(
-          record_set('UPSERT', name, ip, secret)
+          record_set('UPSERT', name, ip, meta, secret)
         )
       end
 
-      def ping(name, secret)
+      def ping(name, meta, secret)
         STDERR.puts "Updating DNS TXT record for ping #{name} -> (#{secret})"
-        if rs = ping_record_set(name, secret)
+        if rs = ping_record_set(name, meta, secret)
           Custodian.route53_client.change_resource_record_sets(rs)
           true
         else

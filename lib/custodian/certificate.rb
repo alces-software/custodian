@@ -45,7 +45,7 @@ module Custodian
     class << self
       def issue(name, alts)
         unless Custodian.public_ip.nil?
-          DNS.set(name, Custodian.public_ip, DEFAULT_SECRET)
+          DNS.set(name, Custodian.public_ip, nil, DEFAULT_SECRET)
           DNS.await_resolvable(name, Custodian.public_ip)
         end
         

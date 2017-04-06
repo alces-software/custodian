@@ -33,6 +33,34 @@ require 'json'
 module Custodian
   module DNS
     class << self
+      def ping_record_set(name, secret)
+        domain_metadata = (JSON.parse(metadata("#{name}").gsub('\"','"')) rescue nil)
+        if domain_metadata
+          domain_metadata['mtime'] = Time.now.to_i
+          {
+            hosted_zone_id: Custodian.aws_zone_id,
+            change_batch: {
+              comment: "UPSERT TXT record for #{name}",
+              changes: [
+                {
+                  action: "UPSERT",
+                  resource_record_set: {
+                    name: "#{name}.#{Custodian.dns_domain_name}",
+                    type: "TXT",
+                    ttl: Custodian.dns_ttl,
+                    weight: 0,
+                    set_identifier: "#{secret}",
+                    resource_records: [
+                      {value: %("#{domain_metadata.to_json.gsub('"','\"')}")}
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        end
+      end
+
       def record_set(operation, name, ip, secret)
           {
             hosted_zone_id: Custodian.aws_zone_id,
@@ -77,12 +105,27 @@ module Custodian
             }
           }
       end
-      
+
       def set(name, ip, secret)
-        STDERR.puts "Setting DNS record #{name} -> #{ip} (#{secret})"
+        STDERR.puts "Setting DNS records for #{name} -> #{ip} (#{secret})"
         Custodian.route53_client.change_resource_record_sets(
           record_set('UPSERT', name, ip, secret)
         )
+      end
+
+      def ping(name, secret)
+        STDERR.puts "Updating DNS TXT record for ping #{name} -> (#{secret})"
+        if rs = ping_record_set(name, secret)
+          Custodian.route53_client.change_resource_record_sets(rs)
+          true
+        else
+          STDERR.puts "Not found: #{name}"
+          false
+        end
+      rescue
+        STDERR.puts "#{$!.class.name}: #{$!.message}"
+        STDERR.puts $!.backtrace.join("\n")
+        raise
       end
 
       def clear(name, ip, secret)

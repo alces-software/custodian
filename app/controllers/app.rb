@@ -101,5 +101,22 @@ module Custodian
         "No domains reaped."
       end
     end
+
+    post '/ping' do
+      name = @params['name']
+      secret = @params['secret']
+      k = @params['k']
+      s = @params['s']
+      if Custodian.verified?(name, k, s)
+        if Custodian::DNS.ping(name, secret)
+          "pong: #{name}"
+        else
+          status 404
+          "not found: #{name}"
+        end
+      else
+        status 403
+      end
+    end
   end
 end

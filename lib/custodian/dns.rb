@@ -62,7 +62,7 @@ module Custodian
         end
       end
 
-      def record_set(operation, name, ip, meta, secret)
+      def record_set(operation, name, ip, secret, meta = nil)
           {
             hosted_zone_id: Custodian.aws_zone_id,
             change_batch: {
@@ -112,7 +112,7 @@ module Custodian
       def set(name, ip, meta, secret)
         STDERR.puts "Setting DNS records for #{name} -> #{ip} (#{secret})"
         Custodian.route53_client.change_resource_record_sets(
-          record_set('UPSERT', name, ip, meta, secret)
+          record_set('UPSERT', name, ip, secret, meta)
         )
       end
 

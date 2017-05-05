@@ -43,27 +43,23 @@ module Custodian
     end
     
     class << self
-      def issue(name, alts)
-        unless Custodian.public_ip.nil?
-          DNS.set(name, Custodian.public_ip, nil, DEFAULT_SECRET)
-          DNS.await_resolvable(name, Custodian.public_ip)
-        end
-        
-        if authorize(name)
-          csr = Acme::Client::CertificateRequest.new(names: ["#{name}.#{Custodian.dns_domain_name}"].concat(alts))
+      def issue(names)
+        fqdns = names.map {|n| "#{n}.#{Custodian.dns_domain_name}"}
+        if names.all?{|n| authorize(n)}
+          csr = Acme::Client::CertificateRequest.new(names: fqdns)
           certificate = Custodian.acme_client.new_certificate(csr)
           Certificate.new(key: certificate.request.private_key.to_pem,
                           cert: certificate.to_pem,
                           chain: certificate.chain_to_pem,
                           fullchain: certificate.fullchain_to_pem)
         end
-      ensure
-        unless Custodian.public_ip.nil?
-          DNS.clear(name, Custodian.public_ip, DEFAULT_SECRET)
-        end
       end
 
       def authorize(name)
+        unless Custodian.public_ip.nil?
+          DNS.set(name, Custodian.public_ip, nil, DEFAULT_SECRET)
+          DNS.await_resolvable(name, Custodian.public_ip)
+        end
         attempts = 0
         begin
           authorization = Custodian.acme_client.authorize(domain: "#{name}.#{Custodian.dns_domain_name}")
@@ -86,6 +82,10 @@ module Custodian
           else
             false
           end
+        end
+      ensure
+        unless Custodian.public_ip.nil?
+          DNS.clear(name, Custodian.public_ip, DEFAULT_SECRET)
         end
       end
 

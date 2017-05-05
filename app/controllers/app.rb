@@ -53,27 +53,44 @@ module Custodian
       s = @params['s']
       meta = @params['meta']
       if Custodian.verified?(name, k, s)
-        resolved_ip = Custodian::DNS.resolve(name)
-        if !resolved_ip.nil?
-          if Custodian::DNS.clear(name, resolved_ip, secret)
-            # Given the TTL on the DNS, this challenge will not work
-            # until the name loses its A record and falls back to the
-            # CNAME for Custodian.  We indicate this to the client by
-            # returning an appropriate JSON payload.
-            {
-              retry: Custodian.dns_ttl
-            }.to_json
+        ip_map = {name => ip}
+        alts.each do |a|
+          alt_parts = a.split(':')
+          ip_map[a[0]] = a[1].nil? ? ip : a[1]
+        end
+        names = ip_map.keys
+        states = names.map do |n|
+          resolved_ip = Custodian::DNS.resolve(n)
+          if !resolved_ip.nil?
+            if Custodian::DNS.clear(n, resolved_ip, secret)
+              # Given the TTL on the DNS, this challenge will not work
+              # until the name loses its A record and falls back to the
+              # CNAME for Custodian.  We indicate this to the client by
+              # returning an appropriate JSON payload.
+              :retry
+            else
+              STDERR.puts "Unable to clear existing IP (#{resolved_ip}) for #{n}"
+              :fail
+            end
           else
-            STDERR.puts "Unable to clear existing IP (#{resolved_ip}) for #{name}"
-            status 403
+            :ok
           end
+        end
+        if states.include?(:fail)
+          status 403
+        elsif states.include?(:retry)
+          {
+            retry: Custodian.dns_ttl
+          }.to_json
         else
-          cert_data = Custodian::Certificate.issue(name, alts)
-          Custodian::DNS.set(name, ip, meta, secret)
+          cert_data = Custodian::Certificate.issue(names)
           if cert_data.nil?
-            STDERR.puts "Unable to issue certificate for #{name}"
+            STDERR.puts "Unable to issue certificate for #{name} (SAN: #{alts})"
             status 403
           else
+            ip_map.each do |name, ip|
+              Custodian::DNS.set(name, ip, meta, secret)
+            end
             {
               cert: cert_data.cert,
               key: cert_data.key,

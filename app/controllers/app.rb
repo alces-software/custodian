@@ -56,7 +56,7 @@ module Custodian
         ip_map = {name => ip}
         alts.each do |a|
           alt_parts = a.split(':')
-          ip_map[a[0]] = a[1].nil? ? ip : a[1]
+          ip_map[alt_parts[0]] = alt_parts[1].nil? ? ip : alt_parts[1]
         end
         names = ip_map.keys
         states = names.map do |n|

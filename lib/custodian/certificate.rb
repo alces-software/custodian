@@ -83,6 +83,8 @@ module Custodian
             false
           end
         end
+      rescue Acme::Client::Error
+        false
       ensure
         unless Custodian.public_ip.nil?
           DNS.clear(name, Custodian.public_ip, DEFAULT_SECRET)

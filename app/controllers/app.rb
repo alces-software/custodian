@@ -84,13 +84,13 @@ module Custodian
           }.to_json
         else
           cert_data = Custodian::Certificate.issue(names)
+          ip_map.each do |name, ip|
+            Custodian::DNS.set(name, ip, meta, secret)
+          end
           if cert_data.nil?
             STDERR.puts "Unable to issue certificate for #{name} (SAN: #{alts})"
             status 403
           else
-            ip_map.each do |name, ip|
-              Custodian::DNS.set(name, ip, meta, secret)
-            end
             {
               cert: cert_data.cert,
               key: cert_data.key,

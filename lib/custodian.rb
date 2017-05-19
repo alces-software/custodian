@@ -94,12 +94,12 @@ module Custodian
       # updated for more than 3 days or have existed for more than 90 days.
       DNS.each_record do |r|
         if r[:metadata]
-          if r[:metadata].key?('ctime')
-            ctime = Time.at(r[:metadata]['ctime'].to_i)
-            candidates << r if Time.now - ctime >= DAYS_90
-          elsif r[:metadata].key?('mtime')
+          if r[:metadata].key?('mtime')
             mtime = Time.at(r[:metadata]['mtime'].to_i)
             candidates << r if Time.now - mtime >= DAYS_3
+          elsif r[:metadata].key?('ctime')
+            ctime = Time.at(r[:metadata]['ctime'].to_i)
+            candidates << r if Time.now - ctime >= DAYS_90
           end
         end
       end

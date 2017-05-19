@@ -98,7 +98,7 @@ module Custodian
             candidates << r if Time.now - mtime >= (3 * DAYS)
           elsif r[:metadata].key?('ctime')
             ctime = Time.at(r[:metadata]['ctime'].to_i)
-            candidates << r if Time.now - ctime >= (90 * DAYS)
+            candidates << r if Time.now - ctime >= (recency * DAYS)
           end
         end
       end

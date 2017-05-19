@@ -112,7 +112,8 @@ module Custodian
     end
 
     get '/reap/?:days?' do
-      reaped = Custodian.reap(params[:days] || 90)
+      recency = params[:days].to_i
+      reaped = Custodian.reap(recency >= 14 ? recency : 90)
       if reaped.any?
         reaped.join("\n")
       else

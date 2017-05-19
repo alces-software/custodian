@@ -39,8 +39,7 @@ module Custodian
              else
                'https://acme-v01.api.letsencrypt.org/'
              end
-  DAYS_90 = 90 * 24 * 60 * 60
-  DAYS_3 = 3 * 24 * 60 * 60
+  DAYS = 24 * 60 * 60
 
   Aws.config[:region] = 'us-east-1'
 
@@ -88,7 +87,7 @@ module Custodian
       k == Digest::MD5.hexdigest("#{name}:#{s}:#{naming_secret}")
     end
 
-    def reap
+    def reap(recency = 90)
       candidates = []
       # iterate over existing records, mark any that haven't been
       # updated for more than 3 days or have existed for more than 90 days.
@@ -96,10 +95,10 @@ module Custodian
         if r[:metadata]
           if r[:metadata].key?('mtime')
             mtime = Time.at(r[:metadata]['mtime'].to_i)
-            candidates << r if Time.now - mtime >= DAYS_3
+            candidates << r if Time.now - mtime >= (3 * DAYS)
           elsif r[:metadata].key?('ctime')
             ctime = Time.at(r[:metadata]['ctime'].to_i)
-            candidates << r if Time.now - ctime >= DAYS_90
+            candidates << r if Time.now - ctime >= (90 * DAYS)
           end
         end
       end

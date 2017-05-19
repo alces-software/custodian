@@ -111,8 +111,8 @@ module Custodian
       end
     end
 
-    get '/reap' do
-      reaped = Custodian.reap
+    get '/reap/?:days?' do
+      reaped = Custodian.reap(params[:days] || 90)
       if reaped.any?
         reaped.join("\n")
       else

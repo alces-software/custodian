@@ -80,7 +80,7 @@ module Custodian
           status 403
         elsif states.include?(:retry)
           {
-            retry: Custodian.dns_ttl
+            retry: (Custodian.dns_ttl.to_i + 5)
           }.to_json
         else
           cert_data = Custodian::Certificate.issue(names)

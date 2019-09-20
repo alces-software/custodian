@@ -80,7 +80,8 @@ module Custodian
                              key: account_key_object_key)
         .body.read)
     rescue Aws::S3::Errors::ServiceError
-      nil
+      STDERR.puts $!.message
+      STDERR.puts $!.backtrace.join("\n")
     end
 
     def verified?(name, k, s)

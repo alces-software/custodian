@@ -78,8 +78,11 @@ module Custodian
             while challenge.verify_status == 'pending' do
               sleep 1
             end
-            challenge.verify_status == 'valid'
+            status = challenge.verify_status
+            STDERR.puts "Verification status: #{status}"
+            status == 'valid'
           else
+            STDERR.puts "Request for verification failed."
             false
           end
         end

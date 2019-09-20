@@ -84,6 +84,8 @@ module Custodian
           end
         end
       rescue Acme::Client::Error
+        STDERR.puts $!.message
+        STDERR.puts $!.backtrace.join("\n")
         false
       ensure
         unless Custodian.public_ip.nil?

@@ -393,8 +393,8 @@ Usage:
 EOF
 }
 
-if [ -f /etc/xdg/flight.rc ]; then
-  . /etc/xdg/flight.rc
+if [ -f /etc/xdg/flight-ssl.rc ]; then
+  . /etc/xdg/flight-ssl.rc
 fi
 _DOMAIN="${flight_SSL_domain}"
 _SEEKRET="${flight_SSL_seekret}"

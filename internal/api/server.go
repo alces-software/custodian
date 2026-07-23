@@ -50,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/v1/access-keys", s.handleRegisterAccessKey)
 		r.Get("/v1/access-keys", s.handleListAccessKeys)
 		r.Get("/v1/access-keys/{id}", s.handleGetAccessKey)
+		r.Patch("/v1/access-keys/{id}", s.handleUpdateAccessKey)
 		r.Delete("/v1/access-keys/{id}", s.handleRevokeAccessKey)
 
 		r.Post("/v1/certificates", s.handleIssue)
@@ -201,6 +202,46 @@ func (s *Server) handleGetAccessKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "get failed")
 		return
 	}
+	writeJSON(w, http.StatusOK, accessKeyMeta(ak, false))
+}
+
+type updateAccessKeyBody struct {
+	Description *string `json:"description"`
+}
+
+func (s *Server) handleUpdateAccessKey(w http.ResponseWriter, r *http.Request) {
+	if !authz.CanManageAccessKeys(principalFrom(r.Context())) {
+		writeError(w, http.StatusForbidden, "forbidden", "admin key required")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	var body updateAccessKeyBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	if body.Description == nil {
+		writeError(w, http.StatusBadRequest, "validation_error", "description is required")
+		return
+	}
+	if err := s.store.UpdateAccessKeyDescription(r.Context(), id, *body.Description); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "access key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", "update failed")
+		return
+	}
+	ak, err := s.store.GetAccessKeyByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "get failed")
+		return
+	}
+	_ = s.store.InsertAudit(r.Context(), "access_key.update", nil, actorLabel(r.Context()), id.String())
 	writeJSON(w, http.StatusOK, accessKeyMeta(ak, false))
 }
 

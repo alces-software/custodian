@@ -173,8 +173,14 @@ func (s *Store) ListAccessKeys(ctx context.Context) ([]AccessKey, error) {
 // UpdateAccessKeyDescription sets description.
 func (s *Store) UpdateAccessKeyDescription(ctx context.Context, id uuid.UUID, description string) error {
 	description = NormalizeDescription(description)
-	_, err := s.pool.Exec(ctx, `UPDATE access_keys SET description = $2 WHERE id = $1`, id, description)
-	return err
+	tag, err := s.pool.Exec(ctx, `UPDATE access_keys SET description = $2 WHERE id = $1`, id, description)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RevokeAccessKey soft-revokes a key (idempotent).

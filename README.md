@@ -48,6 +48,7 @@ curl -fsS -X POST -H "Authorization: Bearer $ADMIN_KEY" "$URL/v1/renew"
 | `POST` | `/v1/access-keys` | admin, registrar |
 | `GET` | `/v1/access-keys` | admin |
 | `GET` | `/v1/access-keys/{id}` | admin |
+| `PATCH` | `/v1/access-keys/{id}` | admin (update description) |
 | `DELETE` | `/v1/access-keys/{id}` | admin (soft revoke) |
 | `POST` | `/v1/certificates` | access key, admin |
 | `GET` | `/v1/certificates` | access key (own), admin (all) |

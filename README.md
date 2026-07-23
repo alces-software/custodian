@@ -86,6 +86,22 @@ Admin issue on behalf of a key:
 
 `API_CLIENTS` is **removed** (ignored with a warning if set).
 
+### Domain catalog patterns
+
+| Pattern | Matches | Example |
+|---------|---------|---------|
+| `example.com` | Exact host only | `example.com` |
+| `*.example.com` | **One** label under the base | `foo.example.com` — not `a.b.example.com` |
+| `**.example.com` | **One or more** labels under the base | `foo.example.com`, `login.kelvin.example.com` |
+
+Most specific match wins (exact → `*` → `**`). Apex (`example.com`) is not matched by `*`/`**`.
+
+For nested Alces hosts under one zone:
+
+```json
+[{"pattern":"**.alces.network","zone":"alces-network"}]
+```
+
 ## Local / Dokku
 
 ```bash
@@ -97,7 +113,7 @@ docker compose up --build
 dokku config:set custodian \
   ADMIN_API_KEYS="$(openssl rand -hex 24)" \
   REGISTRAR_API_KEYS="$(openssl rand -hex 24)" \
-  DOMAIN_CATALOG='[{"pattern":"*.example.com","zone":"example-com"}]' \
+  DOMAIN_CATALOG='[{"pattern":"**.example.com","zone":"example-com"}]' \
   LE_EMAIL=ops@example.com \
   LE_DIRECTORY=staging \
   DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)" \

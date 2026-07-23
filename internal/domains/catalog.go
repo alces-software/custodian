@@ -174,7 +174,7 @@ func (c *Catalog) ValidateNames(cn string, sans []string) (*NameSet, error) {
 }
 
 // PatternCovers reports whether scopePattern allows targetName
-// (same match rules as allowlist: exact or single-label wildcard).
+// (exact, single-label *, or multi-label ** wildcards).
 func PatternCovers(scopePattern, targetName string) bool {
 	return match(normalize(scopePattern), normalize(targetName))
 }
@@ -197,13 +197,16 @@ func PatternsCoverAll(scopePatterns []string, names []string) bool {
 }
 
 // specificity scores patterns so more specific wins.
-// Exact hostnames beat wildcards; longer patterns beat shorter.
+// Exact > single-label * > multi-label **; longer bases beat shorter.
 func specificity(pattern string) int {
 	p := normalize(pattern)
 	score := len(p) * 10
-	if strings.HasPrefix(p, "*.") {
-		score -= 5 // prefer exact over wildcard when both match
-	} else {
+	switch {
+	case strings.HasPrefix(p, "**."):
+		score -= 50 // multi-label: least specific wildcard
+	case strings.HasPrefix(p, "*."):
+		score -= 5
+	default:
 		score += 1000
 	}
 	return score
@@ -216,6 +219,18 @@ func normalize(s string) string {
 }
 
 func validatePattern(p string) error {
+	// Multi-label: **.example.com
+	if strings.HasPrefix(p, "**.") {
+		rest := strings.TrimPrefix(p, "**.")
+		if rest == "" || strings.Contains(rest, "*") {
+			return fmt.Errorf("invalid multi-label wildcard pattern %q", p)
+		}
+		if !validHostname(rest) {
+			return fmt.Errorf("invalid multi-label wildcard pattern %q", p)
+		}
+		return nil
+	}
+	// Single-label: *.example.com
 	if strings.HasPrefix(p, "*.") {
 		rest := strings.TrimPrefix(p, "*.")
 		if rest == "" || strings.Contains(rest, "*") {
@@ -227,7 +242,7 @@ func validatePattern(p string) error {
 		return nil
 	}
 	if strings.Contains(p, "*") {
-		return fmt.Errorf("only single-label prefix wildcards are supported: %q", p)
+		return fmt.Errorf("unsupported wildcard form %q (use *.base or **.base)", p)
 	}
 	if !validHostname(p) {
 		return fmt.Errorf("invalid pattern %q", p)
@@ -239,20 +254,55 @@ func match(pattern, name string) bool {
 	if pattern == name {
 		return true
 	}
+	// Multi-label first (**.) so we don't confuse with other forms.
+	if strings.HasPrefix(pattern, "**.") {
+		rest := strings.TrimPrefix(pattern, "**.")
+		suffix := "." + rest
+		if !strings.HasSuffix(name, suffix) {
+			return false
+		}
+		prefix := strings.TrimSuffix(name, suffix)
+		// Require at least one label under the base (not the apex itself).
+		if prefix == "" || strings.HasPrefix(prefix, ".") || strings.HasSuffix(prefix, ".") || strings.Contains(prefix, "..") {
+			return false
+		}
+		// Every label in the prefix must be a valid DNS label.
+		for _, label := range strings.Split(prefix, ".") {
+			if !validDNSLabel(label) {
+				return false
+			}
+		}
+		return true
+	}
 	if strings.HasPrefix(pattern, "*.") {
 		suffix := pattern[1:] // ".apps.example.com"
 		if !strings.HasSuffix(name, suffix) {
 			return false
 		}
 		prefix := strings.TrimSuffix(name, suffix)
+		// Single label only.
 		if prefix == "" || strings.Contains(prefix, ".") {
 			return false
 		}
-		// wildcard pattern also covers the bare suffix only if we want *.x to match x?
-		// Standard: *.apps.example.com does NOT match apps.example.com
-		return true
+		return validDNSLabel(prefix)
 	}
 	return false
+}
+
+func validDNSLabel(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, c := range label {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isWildcardName(name string) bool {
@@ -271,16 +321,7 @@ func validHostname(name string) bool {
 		return false
 	}
 	for _, label := range labels {
-		if label == "" || len(label) > 63 {
-			return false
-		}
-		if label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, c := range label {
-			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
-				continue
-			}
+		if !validDNSLabel(label) {
 			return false
 		}
 	}

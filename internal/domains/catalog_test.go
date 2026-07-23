@@ -85,3 +85,54 @@ func TestPatternsCoverAll(t *testing.T) {
 		t.Fatal("expected not cover")
 	}
 }
+
+func TestMultiLabelWildcard(t *testing.T) {
+	cat, err := NewCatalog([]Entry{
+		{Pattern: "**.alces.network", Zone: "alces-network"},
+		{Pattern: "*.alces.network", Zone: "alces-network-single"},
+		{Pattern: "*.kelvin.alces.network", Zone: "kelvin-zone"},
+	}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Nested host under multi-label **
+	_, zone, err := cat.Resolve("login.kelvin.alces.network")
+	if err != nil {
+		t.Fatalf("login.kelvin: %v", err)
+	}
+	// *.kelvin.alces.network is more specific than **.alces.network
+	if zone != "kelvin-zone" {
+		t.Fatalf("expected kelvin-zone, got %q", zone)
+	}
+
+	// Single-label still prefers *. over **
+	_, zone, err = cat.Resolve("foo.alces.network")
+	if err != nil || zone != "alces-network-single" {
+		t.Fatalf("foo.alces.network zone=%q err=%v", zone, err)
+	}
+
+	// Deep name only covered by **
+	cat2, err := NewCatalog([]Entry{
+		{Pattern: "**.alces.network", Zone: "alces-network"},
+	}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, zone, err = cat2.Resolve("login.kelvin.alces.network")
+	if err != nil || zone != "alces-network" {
+		t.Fatalf("deep under ** only: zone=%q err=%v", zone, err)
+	}
+	if _, _, err := cat2.Resolve("alces.network"); err == nil {
+		t.Fatal("apex should not match **.alces.network")
+	}
+	if _, err := cat2.ValidateNames("login.kelvin.alces.network", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInvalidMultiLabelPattern(t *testing.T) {
+	if _, err := NewCatalog([]Entry{{Pattern: "**.*.alces.network", Zone: "z"}}, 10); err == nil {
+		t.Fatal("expected invalid pattern")
+	}
+}

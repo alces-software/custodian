@@ -21,8 +21,8 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/gcloud"
 	"github.com/go-acme/lego/v4/registration"
 
-	sealer "github.com/markt/custodian/internal/crypto"
-	"github.com/markt/custodian/internal/store"
+	sealer "alces/custodian/internal/crypto"
+	"alces/custodian/internal/store"
 )
 
 // Config for the ACME issuer.

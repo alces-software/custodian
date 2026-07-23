@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/markt/custodian/internal/acme"
-	"github.com/markt/custodian/internal/api"
-	"github.com/markt/custodian/internal/authz"
-	"github.com/markt/custodian/internal/config"
-	"github.com/markt/custodian/internal/crypto"
-	"github.com/markt/custodian/internal/store"
+	"alces/custodian/internal/acme"
+	"alces/custodian/internal/api"
+	"alces/custodian/internal/authz"
+	"alces/custodian/internal/config"
+	"alces/custodian/internal/crypto"
+	"alces/custodian/internal/store"
 )
 
 func main() {

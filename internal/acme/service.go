@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/markt/custodian/internal/domains"
-	sealer "github.com/markt/custodian/internal/crypto"
-	"github.com/markt/custodian/internal/store"
+	"alces/custodian/internal/domains"
+	sealer "alces/custodian/internal/crypto"
+	"alces/custodian/internal/store"
 )
 
 // Service orchestrates allowlist checks, ACME issuance, and persistence.

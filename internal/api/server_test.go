@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/markt/custodian/internal/authz"
+	"alces/custodian/internal/authz"
 )
 
 func TestHealthzNoAuth(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/markt/custodian
+module alces/custodian
 
 go 1.26.5
 

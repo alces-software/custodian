@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/markt/custodian/internal/store"
+	"alces/custodian/internal/store"
 )
 
 func TestMatchKey(t *testing.T) {

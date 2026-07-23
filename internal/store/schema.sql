@@ -22,12 +22,15 @@ CREATE TABLE IF NOT EXISTS certificates (
     not_after        TIMESTAMPTZ,
     serial           TEXT,
     issuer           TEXT,
+    dns_zone         TEXT,
     acme_order_url   TEXT,
     last_error       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     renewed_at       TIMESTAMPTZ
 );
+
+ALTER TABLE certificates ADD COLUMN IF NOT EXISTS dns_zone TEXT;
 
 CREATE INDEX IF NOT EXISTS certificates_status_not_after_idx
     ON certificates (status, not_after)

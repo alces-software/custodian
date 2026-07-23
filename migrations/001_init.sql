@@ -23,6 +23,7 @@ CREATE TABLE certificates (
     not_after        TIMESTAMPTZ,
     serial           TEXT,
     issuer           TEXT,
+    dns_zone         TEXT,
     acme_order_url   TEXT,
     last_error       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

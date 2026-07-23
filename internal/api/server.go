@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -15,23 +14,24 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/markt/custodian/internal/acme"
+	"github.com/markt/custodian/internal/authz"
 	"github.com/markt/custodian/internal/store"
 )
 
 // Server is the HTTP API.
 type Server struct {
-	store   *store.Store
-	svc     *acme.Service
-	apiKeys []string
-	log     *slog.Logger
+	store *store.Store
+	svc   *acme.Service
+	authz *authz.Registry
+	log   *slog.Logger
 }
 
 // New constructs the API server.
-func New(st *store.Store, svc *acme.Service, apiKeys []string, log *slog.Logger) *Server {
+func New(st *store.Store, svc *acme.Service, reg *authz.Registry, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, svc: svc, apiKeys: apiKeys, log: log}
+	return &Server{store: st, svc: svc, authz: reg, log: log}
 }
 
 // Handler returns the root HTTP handler.
@@ -69,6 +69,7 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 			"status", ww.Status(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", middleware.GetReqID(r.Context()),
+			"client_id", clientIDFrom(r.Context()),
 		)
 	})
 }
@@ -82,40 +83,30 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
-		if !s.validKey(token) {
+		client, err := s.authz.Authenticate(token)
+		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid API key")
 			return
 		}
-		ctx := context.WithValue(r.Context(), actorKey{}, tokenFingerprint(token))
+		ctx := context.WithValue(r.Context(), clientKey{}, client)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-type actorKey struct{}
+type clientKey struct{}
 
-func actorFrom(ctx context.Context) string {
-	if v, ok := ctx.Value(actorKey{}).(string); ok {
+func clientFrom(ctx context.Context) *authz.Client {
+	if v, ok := ctx.Value(clientKey{}).(*authz.Client); ok {
 		return v
 	}
+	return nil
+}
+
+func clientIDFrom(ctx context.Context) string {
+	if c := clientFrom(ctx); c != nil {
+		return c.ID
+	}
 	return ""
-}
-
-func (s *Server) validKey(token string) bool {
-	tok := []byte(token)
-	for _, k := range s.apiKeys {
-		kb := []byte(k)
-		if len(tok) == len(kb) && subtle.ConstantTimeCompare(tok, kb) == 1 {
-			return true
-		}
-	}
-	return false
-}
-
-func tokenFingerprint(token string) string {
-	if len(token) <= 4 {
-		return "****"
-	}
-	return "…" + token[len(token)-4:]
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -142,11 +133,27 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
+	client := clientFrom(r.Context())
+	// Pre-check scope on requested names (catalog validation happens in service).
+	names := append([]string{body.CommonName}, body.SANs...)
+	// Filter empty SANs for authz pre-check
+	clean := make([]string, 0, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			clean = append(clean, n)
+		}
+	}
+	if len(clean) == 0 || !s.authz.CanAccessNames(client, clean) {
+		writeError(w, http.StatusForbidden, "forbidden", "key is not authorized for the requested domain(s)")
+		return
+	}
+
 	cert, created, err := s.svc.Issue(r.Context(), acme.IssueRequest{
 		CommonName: body.CommonName,
 		SANs:       body.SANs,
 		Force:      body.Force,
-		Actor:      actorFrom(r.Context()),
+		Actor:      client.ID,
 	})
 	if err != nil {
 		s.writeIssueError(w, err)
@@ -160,6 +167,7 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
+	client := clientFrom(r.Context())
 	certs, err := s.store.ListCertificates(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "list failed")
@@ -167,42 +175,25 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]certMeta, 0, len(certs))
 	for i := range certs {
+		if !s.authz.CanAccessCert(client, &certs[i]) {
+			continue
+		}
 		out = append(out, certToMeta(&certs[i]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"certificates": out})
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
-		return
-	}
-	cert, err := s.store.GetCertificate(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "get failed")
+	cert, ok := s.loadAuthorizedCert(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, certToMeta(cert))
 }
 
 func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
-		return
-	}
-	cert, err := s.store.GetCertificate(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "get failed")
+	cert, ok := s.loadAuthorizedCert(w, r)
+	if !ok {
 		return
 	}
 	if cert.Status != store.StatusActive || cert.CertificatePEM == "" {
@@ -231,35 +222,36 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"id":               cert.ID.String(),
-		"common_name":      cert.CommonName,
-		"private_key_pem":  keyPEM,
-		"certificate_pem":  cert.CertificatePEM,
-		"chain_pem":        cert.ChainPEM,
-		"fullchain_pem":    fullchain,
+		"id":              cert.ID.String(),
+		"common_name":     cert.CommonName,
+		"private_key_pem": keyPEM,
+		"certificate_pem": cert.CertificatePEM,
+		"chain_pem":       cert.ChainPEM,
+		"fullchain_pem":   fullchain,
 	})
 }
 
 func (s *Server) handleRenewOne(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+	cert, ok := s.loadAuthorizedCert(w, r)
+	if !ok {
 		return
 	}
-	cert, err := s.svc.RenewOne(r.Context(), id, actorFrom(r.Context()))
+	client := clientFrom(r.Context())
+	out, err := s.svc.RenewOne(r.Context(), cert.ID, client.ID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
-			return
-		}
 		s.writeIssueError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, certToMeta(cert))
+	writeJSON(w, http.StatusOK, certToMeta(out))
 }
 
 func (s *Server) handleRenewDue(w http.ResponseWriter, r *http.Request) {
-	result, err := s.svc.RenewDue(r.Context(), actorFrom(r.Context()))
+	client := clientFrom(r.Context())
+	if !client.IsAdmin() {
+		writeError(w, http.StatusForbidden, "forbidden", "bulk renew requires an admin API key")
+		return
+	}
+	result, err := s.svc.RenewDue(r.Context(), client.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -268,12 +260,12 @@ func (s *Server) handleRenewDue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+	cert, ok := s.loadAuthorizedCert(w, r)
+	if !ok {
 		return
 	}
-	if err := s.store.SoftDelete(r.Context(), id); err != nil {
+	client := clientFrom(r.Context())
+	if err := s.store.SoftDelete(r.Context(), cert.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
 			return
@@ -281,8 +273,32 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "delete failed")
 		return
 	}
-	_ = s.store.InsertAudit(r.Context(), "delete", &id, actorFrom(r.Context()), "")
+	id := cert.ID
+	_ = s.store.InsertAudit(r.Context(), "delete", &id, client.ID, "")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// loadAuthorizedCert loads by id and returns 404 if missing or out of scope.
+func (s *Server) loadAuthorizedCert(w http.ResponseWriter, r *http.Request) (*store.Certificate, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return nil, false
+	}
+	cert, err := s.store.GetCertificate(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "internal", "get failed")
+		return nil, false
+	}
+	if !s.authz.CanAccessCert(clientFrom(r.Context()), cert) {
+		writeError(w, http.StatusNotFound, "not_found", "certificate not found")
+		return nil, false
+	}
+	return cert, true
 }
 
 func (s *Server) writeIssueError(w http.ResponseWriter, err error) {
@@ -291,7 +307,8 @@ func (s *Server) writeIssueError(w http.ResponseWriter, err error) {
 	case strings.Contains(msg, "not allowlisted"),
 		strings.Contains(msg, "invalid"),
 		strings.Contains(msg, "required"),
-		strings.Contains(msg, "too many"):
+		strings.Contains(msg, "too many"),
+		strings.Contains(msg, "multiple Cloud DNS zones"):
 		writeError(w, http.StatusBadRequest, "validation_error", msg)
 	case strings.Contains(msg, "busy"):
 		writeError(w, http.StatusConflict, "busy", msg)
@@ -306,6 +323,7 @@ type certMeta struct {
 	CommonName string     `json:"common_name"`
 	SANs       []string   `json:"sans"`
 	Status     string     `json:"status"`
+	DNSZone    string     `json:"dns_zone,omitempty"`
 	NotBefore  *time.Time `json:"not_before,omitempty"`
 	NotAfter   *time.Time `json:"not_after,omitempty"`
 	Serial     string     `json:"serial,omitempty"`
@@ -322,6 +340,7 @@ func certToMeta(c *store.Certificate) certMeta {
 		CommonName: c.CommonName,
 		SANs:       c.SANs,
 		Status:     c.Status,
+		DNSZone:    c.DNSZone,
 		NotBefore:  c.NotBefore,
 		NotAfter:   c.NotAfter,
 		Serial:     c.Serial,

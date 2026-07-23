@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/markt/custodian/internal/acme"
-	"github.com/markt/custodian/internal/allowlist"
 	"github.com/markt/custodian/internal/api"
 	"github.com/markt/custodian/internal/config"
 	"github.com/markt/custodian/internal/crypto"
@@ -29,7 +28,7 @@ func main() {
 	case "serve":
 		serveCmd(os.Args[2:])
 	case "version":
-		fmt.Println("custodian 0.1.0")
+		fmt.Println("custodian 0.2.0")
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -62,23 +61,20 @@ func serveCmd(args []string) {
 		os.Exit(1)
 	}
 
-	allow, err := allowlist.New(cfg.AllowedDomains, cfg.MaxSANs)
-	if err != nil {
-		log.Error("allowlist", "err", err)
-		os.Exit(1)
+	if !cfg.Authz.HasAdmin() {
+		log.Warn("no admin API client configured; POST /v1/renew (cron) will be forbidden for all keys")
 	}
 
 	issuer := acme.NewIssuer(acme.Config{
 		Email:                 cfg.LEEmail,
 		DirectoryURL:          cfg.LEDirectory,
 		GCPProject:            cfg.GCPProject,
-		CloudDNSZone:          cfg.CloudDNSZone,
 		GCPServiceAccountJSON: cfg.GCPServiceAccountJSON,
 		DNSPropagationTimeout: cfg.DNSPropagationTimeout,
 	}, st, box)
 
-	svc := acme.NewService(st, issuer, box, allow, cfg.RenewBeforeDays)
-	srv := api.New(st, svc, cfg.APIKeys, log)
+	svc := acme.NewService(st, issuer, box, cfg.Catalog, cfg.RenewBeforeDays)
+	srv := api.New(st, svc, cfg.Authz, log)
 
 	addr := ":" + cfg.Port
 	httpServer := &http.Server{
@@ -91,12 +87,14 @@ func serveCmd(args []string) {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	patterns := cfg.Catalog.Patterns()
 	go func() {
 		log.Info("listening",
 			"addr", addr,
 			"le_directory", cfg.LEDirectory,
 			"staging", cfg.IsStaging(),
-			"allowed_domains", strings.Join(cfg.AllowedDomains, ","),
+			"catalog_patterns", strings.Join(patterns, ","),
+			"has_admin_client", cfg.Authz.HasAdmin(),
 		)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server", "err", err)

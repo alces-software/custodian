@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/markt/custodian/internal/allowlist"
+	"github.com/markt/custodian/internal/domains"
 	sealer "github.com/markt/custodian/internal/crypto"
 	"github.com/markt/custodian/internal/store"
 )
@@ -18,17 +18,17 @@ type Service struct {
 	store       *store.Store
 	issuer      *Issuer
 	box         *sealer.Box
-	allow       *allowlist.List
+	catalog     *domains.Catalog
 	renewBefore time.Duration
 }
 
 // NewService builds the certificate service.
-func NewService(st *store.Store, issuer *Issuer, box *sealer.Box, allow *allowlist.List, renewBeforeDays int) *Service {
+func NewService(st *store.Store, issuer *Issuer, box *sealer.Box, catalog *domains.Catalog, renewBeforeDays int) *Service {
 	return &Service{
 		store:       st,
 		issuer:      issuer,
 		box:         box,
-		allow:       allow,
+		catalog:     catalog,
 		renewBefore: time.Duration(renewBeforeDays) * 24 * time.Hour,
 	}
 }
@@ -43,12 +43,12 @@ type IssueRequest struct {
 
 // Issue obtains a certificate (or returns an existing valid one unless Force).
 func (s *Service) Issue(ctx context.Context, req IssueRequest) (*store.Certificate, bool, error) {
-	names, err := s.allow.ValidateNames(req.CommonName, req.SANs)
+	ns, err := s.catalog.ValidateNames(req.CommonName, req.SANs)
 	if err != nil {
 		return nil, false, err
 	}
-	cn := names[0]
-	sans := names[1:]
+	cn := ns.Names[0]
+	sans := ns.Names[1:]
 
 	if !req.Force {
 		existing, err := s.store.FindActiveByNames(ctx, cn, sans)
@@ -74,14 +74,14 @@ func (s *Service) Issue(ctx context.Context, req IssueRequest) (*store.Certifica
 		}
 	}
 
-	certRow, err := s.store.CreateCertificate(ctx, cn, sans)
+	certRow, err := s.store.CreateCertificate(ctx, cn, sans, ns.Zone)
 	if err != nil {
 		return nil, false, err
 	}
 	id := certRow.ID
 	_ = s.store.InsertAudit(ctx, "issue.start", &id, req.Actor, cn)
 
-	result, err := s.issuer.Obtain(ctx, names)
+	result, err := s.issuer.Obtain(ctx, ns.Names, ns.Zone)
 	if err != nil {
 		_ = s.store.MarkFailed(ctx, id, err.Error())
 		_ = s.store.InsertAudit(ctx, "issue.fail", &id, req.Actor, err.Error())
@@ -111,8 +111,8 @@ func (s *Service) RenewOne(ctx context.Context, id uuid.UUID, actor string) (*st
 	if cert.Status == store.StatusDeleted {
 		return nil, fmt.Errorf("certificate is deleted")
 	}
-	names := append([]string{cert.CommonName}, cert.SANs...)
-	if _, err := s.allow.ValidateNames(cert.CommonName, cert.SANs); err != nil {
+	ns, err := s.catalog.ValidateNames(cert.CommonName, cert.SANs)
+	if err != nil {
 		return nil, err
 	}
 
@@ -123,7 +123,7 @@ func (s *Service) RenewOne(ctx context.Context, id uuid.UUID, actor string) (*st
 	defer unlock()
 
 	_ = s.store.InsertAudit(ctx, "renew.start", &id, actor, cert.CommonName)
-	result, err := s.issuer.Obtain(ctx, names)
+	result, err := s.issuer.Obtain(ctx, ns.Names, ns.Zone)
 	if err != nil {
 		_ = s.store.MarkFailed(ctx, id, err.Error())
 		_ = s.store.InsertAudit(ctx, "renew.fail", &id, actor, err.Error())
@@ -137,6 +137,8 @@ func (s *Service) RenewOne(ctx context.Context, id uuid.UUID, actor string) (*st
 	if err := s.store.SaveIssued(ctx, id, encKey, result.CertificatePEM, result.ChainPEM, result.Serial, result.Issuer, result.NotBefore, result.NotAfter); err != nil {
 		return nil, err
 	}
+	// refresh zone if resolved differently
+	_ = s.store.SetDNSZone(ctx, id, ns.Zone)
 	_ = s.store.InsertAudit(ctx, "renew.ok", &id, actor, result.Serial)
 	return s.store.GetCertificate(ctx, id)
 }
@@ -201,7 +203,6 @@ func (s *Service) lockNames(ctx context.Context, cn string, sans []string) (func
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(store.NamesKey(cn, sans)))
 	key := int64(h.Sum64())
-	// avoid 0
 	if key == 0 {
 		key = 1
 	}

@@ -55,12 +55,18 @@ type Certificate struct {
 	NotAfter       *time.Time
 	Serial         string
 	Issuer         string
+	DNSZone        string
 	ACMEOrderURL   string
 	LastError      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	RenewedAt      *time.Time
 }
+
+const certSelectCols = `
+	id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
+	not_before, not_after, serial, issuer, dns_zone, acme_order_url, last_error,
+	created_at, updated_at, renewed_at`
 
 // New connects to Postgres and applies schema.
 func New(ctx context.Context, databaseURL string) (*Store, error) {
@@ -137,27 +143,21 @@ func (s *Store) UpsertLEAccount(ctx context.Context, email, privateKeyEnc, regis
 }
 
 // CreateCertificate inserts a pending certificate row.
-func (s *Store) CreateCertificate(ctx context.Context, cn string, sans []string) (*Certificate, error) {
+func (s *Store) CreateCertificate(ctx context.Context, cn string, sans []string, dnsZone string) (*Certificate, error) {
 	if sans == nil {
 		sans = []string{}
 	}
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO certificates (common_name, sans, status)
-		VALUES ($1, $2, $3)
-		RETURNING id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-		          not_before, not_after, serial, issuer, acme_order_url, last_error,
-		          created_at, updated_at, renewed_at`,
-		cn, sans, StatusPending)
+		INSERT INTO certificates (common_name, sans, status, dns_zone)
+		VALUES ($1, $2, $3, $4)
+		RETURNING `+certSelectCols,
+		cn, sans, StatusPending, dnsZone)
 	return scanCert(row)
 }
 
 // GetCertificate returns a certificate by ID.
 func (s *Store) GetCertificate(ctx context.Context, id uuid.UUID) (*Certificate, error) {
-	row := s.pool.QueryRow(ctx, `
-		SELECT id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-		       not_before, not_after, serial, issuer, acme_order_url, last_error,
-		       created_at, updated_at, renewed_at
-		FROM certificates WHERE id = $1`, id)
+	row := s.pool.QueryRow(ctx, `SELECT `+certSelectCols+` FROM certificates WHERE id = $1`, id)
 	c, err := scanCert(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -171,9 +171,7 @@ func (s *Store) FindActiveByNames(ctx context.Context, cn string, sans []string)
 		sans = []string{}
 	}
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-		       not_before, not_after, serial, issuer, acme_order_url, last_error,
-		       created_at, updated_at, renewed_at
+		SELECT `+certSelectCols+`
 		FROM certificates
 		WHERE status = $1 AND common_name = $2
 		  AND sans @> $3::text[] AND $3::text[] @> sans
@@ -189,9 +187,7 @@ func (s *Store) FindActiveByNames(ctx context.Context, cn string, sans []string)
 // ListCertificates returns non-deleted certificates, newest first.
 func (s *Store) ListCertificates(ctx context.Context) ([]Certificate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-		       not_before, not_after, serial, issuer, acme_order_url, last_error,
-		       created_at, updated_at, renewed_at
+		SELECT `+certSelectCols+`
 		FROM certificates
 		WHERE status != $1
 		ORDER BY created_at DESC`, StatusDeleted)
@@ -213,9 +209,7 @@ func (s *Store) ListCertificates(ctx context.Context) ([]Certificate, error) {
 // ListDueForRenewal returns active certs expiring within the window.
 func (s *Store) ListDueForRenewal(ctx context.Context, before time.Time) ([]Certificate, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-		       not_before, not_after, serial, issuer, acme_order_url, last_error,
-		       created_at, updated_at, renewed_at
+		SELECT `+certSelectCols+`
 		FROM certificates
 		WHERE status = $1 AND not_after IS NOT NULL AND not_after < $2
 		ORDER BY not_after ASC`, StatusActive, before)
@@ -232,6 +226,13 @@ func (s *Store) ListDueForRenewal(ctx context.Context, before time.Time) ([]Cert
 		out = append(out, *c)
 	}
 	return out, rows.Err()
+}
+
+// SetDNSZone updates the stored Cloud DNS zone for a certificate.
+func (s *Store) SetDNSZone(ctx context.Context, id uuid.UUID, zone string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE certificates SET dns_zone = $2, updated_at = now() WHERE id = $1`, id, zone)
+	return err
 }
 
 // MarkFailed records an issuance/renewal failure.
@@ -326,11 +327,11 @@ type scannable interface {
 func scanCert(row scannable) (*Certificate, error) {
 	var c Certificate
 	var sans []string
-	var priv, cert, chain, serial, issuer, orderURL, lastErr *string
+	var priv, cert, chain, serial, issuer, dnsZone, orderURL, lastErr *string
 	err := row.Scan(
 		&c.ID, &c.CommonName, &sans, &c.Status,
 		&priv, &cert, &chain,
-		&c.NotBefore, &c.NotAfter, &serial, &issuer, &orderURL, &lastErr,
+		&c.NotBefore, &c.NotAfter, &serial, &issuer, &dnsZone, &orderURL, &lastErr,
 		&c.CreatedAt, &c.UpdatedAt, &c.RenewedAt,
 	)
 	if err != nil {
@@ -345,6 +346,7 @@ func scanCert(row scannable) (*Certificate, error) {
 	c.ChainPEM = deref(chain)
 	c.Serial = deref(serial)
 	c.Issuer = deref(issuer)
+	c.DNSZone = deref(dnsZone)
 	c.ACMEOrderURL = deref(orderURL)
 	c.LastError = deref(lastErr)
 	return &c, nil

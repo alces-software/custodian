@@ -71,14 +71,15 @@ func (u *user) GetRegistration() *registration.Resource { return u.Registration 
 func (u *user) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
 // Obtain issues a new certificate for the given names (CN first).
-func (i *Issuer) Obtain(ctx context.Context, names []string) (*Result, error) {
+// zone is the Cloud DNS managed zone id/name for this order (required for multi-zone catalogs).
+func (i *Issuer) Obtain(ctx context.Context, names []string, zone string) (*Result, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no names")
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	client, err := i.client(ctx)
+	client, err := i.client(ctx, zone)
 	if err != nil {
 		return nil, err
 	}
@@ -101,8 +102,8 @@ func (i *Issuer) Obtain(ctx context.Context, names []string) (*Result, error) {
 	return parseCertificateResource(certs)
 }
 
-func (i *Issuer) client(ctx context.Context) (*lego.Client, error) {
-	if err := i.prepareGCPEnv(); err != nil {
+func (i *Issuer) client(ctx context.Context, zone string) (*lego.Client, error) {
+	if err := i.prepareGCPEnv(zone); err != nil {
 		return nil, err
 	}
 
@@ -150,7 +151,7 @@ func (i *Issuer) client(ctx context.Context) (*lego.Client, error) {
 	return client, nil
 }
 
-func (i *Issuer) prepareGCPEnv() error {
+func (i *Issuer) prepareGCPEnv(zone string) error {
 	if i.cfg.GCPServiceAccountJSON != "" {
 		// lego accepts the raw JSON in GCE_SERVICE_ACCOUNT
 		_ = os.Setenv("GCE_SERVICE_ACCOUNT", i.cfg.GCPServiceAccountJSON)
@@ -173,9 +174,16 @@ func (i *Issuer) prepareGCPEnv() error {
 	if i.cfg.GCPProject != "" {
 		_ = os.Setenv("GCE_PROJECT", i.cfg.GCPProject)
 	}
-	// Skip auto zone detection when configured (managed zone name or ID).
-	if i.cfg.CloudDNSZone != "" {
-		_ = os.Setenv("GCE_ZONE_ID", i.cfg.CloudDNSZone)
+	// Pin zone for this obtain. Prefer explicit zone arg; fall back to static config.
+	// Always set or clear under the ACME mutex so a prior obtain cannot leak zone.
+	z := strings.TrimSpace(zone)
+	if z == "" {
+		z = strings.TrimSpace(i.cfg.CloudDNSZone)
+	}
+	if z != "" {
+		_ = os.Setenv("GCE_ZONE_ID", z)
+	} else {
+		_ = os.Unsetenv("GCE_ZONE_ID")
 	}
 	if i.cfg.DNSPropagationTimeout > 0 {
 		_ = os.Setenv("GCE_POLLING_INTERVAL", "5")

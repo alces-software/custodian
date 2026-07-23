@@ -3,10 +3,10 @@
 set -euo pipefail
 
 : "${CUSTODIAN_URL:?set CUSTODIAN_URL, e.g. https://custodian.example}"
-: "${CUSTODIAN_API_KEY:?set CUSTODIAN_API_KEY}"
+: "${ADMIN_KEY:?set ADMIN_KEY (admin API key for bulk renew)}"
 
 curl -fsS -X POST \
-  -H "Authorization: Bearer ${CUSTODIAN_API_KEY}" \
+  -H "Authorization: Bearer ${ADMIN_KEY}" \
   -H "Content-Type: application/json" \
   "${CUSTODIAN_URL%/}/v1/renew"
 echo

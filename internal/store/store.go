@@ -56,6 +56,7 @@ type Certificate struct {
 	Serial         string
 	Issuer         string
 	DNSZone        string
+	AccessKeyID    *uuid.UUID
 	ACMEOrderURL   string
 	LastError      string
 	CreatedAt      time.Time
@@ -65,7 +66,7 @@ type Certificate struct {
 
 const certSelectCols = `
 	id, common_name, sans, status, private_key_enc, certificate_pem, chain_pem,
-	not_before, not_after, serial, issuer, dns_zone, acme_order_url, last_error,
+	not_before, not_after, serial, issuer, dns_zone, access_key_id, acme_order_url, last_error,
 	created_at, updated_at, renewed_at`
 
 // New connects to Postgres and applies schema.
@@ -143,15 +144,15 @@ func (s *Store) UpsertLEAccount(ctx context.Context, email, privateKeyEnc, regis
 }
 
 // CreateCertificate inserts a pending certificate row.
-func (s *Store) CreateCertificate(ctx context.Context, cn string, sans []string, dnsZone string) (*Certificate, error) {
+func (s *Store) CreateCertificate(ctx context.Context, cn string, sans []string, dnsZone string, accessKeyID uuid.UUID) (*Certificate, error) {
 	if sans == nil {
 		sans = []string{}
 	}
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO certificates (common_name, sans, status, dns_zone)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO certificates (common_name, sans, status, dns_zone, access_key_id)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+certSelectCols,
-		cn, sans, StatusPending, dnsZone)
+		cn, sans, StatusPending, dnsZone, accessKeyID)
 	return scanCert(row)
 }
 
@@ -191,6 +192,28 @@ func (s *Store) ListCertificates(ctx context.Context) ([]Certificate, error) {
 		FROM certificates
 		WHERE status != $1
 		ORDER BY created_at DESC`, StatusDeleted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Certificate
+	for rows.Next() {
+		c, err := scanCert(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	return out, rows.Err()
+}
+
+// ListCertificatesByAccessKey returns non-deleted certs for one access key.
+func (s *Store) ListCertificatesByAccessKey(ctx context.Context, accessKeyID uuid.UUID) ([]Certificate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+certSelectCols+`
+		FROM certificates
+		WHERE status != $1 AND access_key_id = $2
+		ORDER BY created_at DESC`, StatusDeleted, accessKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,10 +351,11 @@ func scanCert(row scannable) (*Certificate, error) {
 	var c Certificate
 	var sans []string
 	var priv, cert, chain, serial, issuer, dnsZone, orderURL, lastErr *string
+	var accessKeyID *uuid.UUID
 	err := row.Scan(
 		&c.ID, &c.CommonName, &sans, &c.Status,
 		&priv, &cert, &chain,
-		&c.NotBefore, &c.NotAfter, &serial, &issuer, &dnsZone, &orderURL, &lastErr,
+		&c.NotBefore, &c.NotAfter, &serial, &issuer, &dnsZone, &accessKeyID, &orderURL, &lastErr,
 		&c.CreatedAt, &c.UpdatedAt, &c.RenewedAt,
 	)
 	if err != nil {
@@ -347,6 +371,7 @@ func scanCert(row scannable) (*Certificate, error) {
 	c.Serial = deref(serial)
 	c.Issuer = deref(issuer)
 	c.DNSZone = deref(dnsZone)
+	c.AccessKeyID = accessKeyID
 	c.ACMEOrderURL = deref(orderURL)
 	c.LastError = deref(lastErr)
 	return &c, nil

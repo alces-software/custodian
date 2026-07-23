@@ -1,72 +1,68 @@
 package authz
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
-	"github.com/markt/custodian/internal/domains"
+	"github.com/google/uuid"
+
 	"github.com/markt/custodian/internal/store"
 )
 
-func testCatalog(t *testing.T) *domains.Catalog {
-	t.Helper()
-	c, err := domains.NewCatalog([]domains.Entry{
-		{Pattern: "*.example.com", Zone: "z1"},
-		{Pattern: "example.com", Zone: "z1"},
-		{Pattern: "*.other.com", Zone: "z2"},
-	}, 10)
-	if err != nil {
-		t.Fatal(err)
+func TestMatchKey(t *testing.T) {
+	if !matchKey("abcdef", []string{"xyz", "abcdef"}) {
+		t.Fatal("expected match")
 	}
-	return c
-}
-
-func TestAuthenticateAndScope(t *testing.T) {
-	cat := testCatalog(t)
-	reg, err := NewRegistry([]Client{
-		{ID: "admin", Key: "admin-secret-key", Role: RoleAdmin},
-		// Under catalog *.example.com only single-label children match (pay.example.com, not a.pay.example.com).
-		{ID: "pay", Key: "pay-secret-key!!", Role: RoleTenant, Patterns: []string{"pay.example.com"}},
-	}, cat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reg.HasAdmin() {
-		t.Fatal("expected admin")
-	}
-
-	admin, err := reg.Authenticate("admin-secret-key")
-	if err != nil || !admin.IsAdmin() {
-		t.Fatalf("admin: %v %#v", err, admin)
-	}
-	pay, err := reg.Authenticate("pay-secret-key!!")
-	if err != nil || pay.ID != "pay" {
-		t.Fatalf("pay: %v %#v", err, pay)
-	}
-	if _, err := reg.Authenticate("nope"); err == nil {
-		t.Fatal("expected invalid")
-	}
-
-	if !reg.CanAccessNames(pay, []string{"pay.example.com"}) {
-		t.Fatal("pay should access pay.example.com")
-	}
-	if reg.CanAccessNames(pay, []string{"other.example.com"}) {
-		t.Fatal("pay should not access other.example.com")
-	}
-	cert := &store.Certificate{CommonName: "evil.example.com"}
-	if reg.CanAccessCert(pay, cert) {
-		t.Fatal("pay should not access evil cert")
-	}
-	if !reg.CanAccessCert(admin, cert) {
-		t.Fatal("admin should access catalog names")
+	if matchKey("nope", []string{"abcdef"}) {
+		t.Fatal("expected no match")
 	}
 }
 
-func TestTenantRequiresPatterns(t *testing.T) {
-	cat := testCatalog(t)
-	_, err := NewRegistry([]Client{
-		{ID: "t", Key: "k", Role: RoleTenant},
-	}, cat)
-	if err == nil {
-		t.Fatal("expected error")
+func TestCanAccessCert(t *testing.T) {
+	id := uuid.New()
+	cert := &store.Certificate{AccessKeyID: &id}
+	admin := &Principal{Role: RoleAdmin}
+	owner := &Principal{Role: RoleAccessKey, AccessKeyID: id}
+	other := &Principal{Role: RoleAccessKey, AccessKeyID: uuid.New()}
+	reg := &Principal{Role: RoleRegistrar}
+
+	if !CanAccessCert(admin, cert) {
+		t.Fatal("admin")
+	}
+	if !CanAccessCert(owner, cert) {
+		t.Fatal("owner")
+	}
+	if CanAccessCert(other, cert) {
+		t.Fatal("other")
+	}
+	if CanAccessCert(reg, cert) {
+		t.Fatal("registrar")
+	}
+}
+
+func TestHashMatchesStoreHelper(t *testing.T) {
+	raw := "550e8400-e29b-41d4-a716-446655440000"
+	sum := sha256.Sum256([]byte(raw))
+	want := hex.EncodeToString(sum[:])
+	if store.HashAccessKey(raw) != want {
+		t.Fatal("hash mismatch")
+	}
+}
+
+func TestRoleHelpers(t *testing.T) {
+	admin := &Principal{Role: RoleAdmin}
+	reg := &Principal{Role: RoleRegistrar}
+	if !CanRegisterAccessKey(admin) || !CanRegisterAccessKey(reg) {
+		t.Fatal("register")
+	}
+	if !CanManageAccessKeys(admin) || CanManageAccessKeys(reg) {
+		t.Fatal("manage")
+	}
+	if !CanBulkRenew(admin) || CanBulkRenew(reg) {
+		t.Fatal("renew")
+	}
+	if !CanIssueCertificates(admin) || CanIssueCertificates(reg) {
+		t.Fatal("issue")
 	}
 }

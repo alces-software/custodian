@@ -22,8 +22,8 @@ services:
     environment:
       PORT: "8080"
       DATABASE_URL: postgres://custodian:custodian@db:5432/custodian?sslmode=disable
-      # Legacy flat keys still work; prefer DOMAIN_CATALOG + API_CLIENTS in production.
-      API_KEYS: dev-api-key-change-me
+      ADMIN_API_KEYS: dev-admin-key-change-me
+      REGISTRAR_API_KEYS: dev-registrar-key-change-me
       ALLOWED_DOMAINS: "*.example.com,example.com"
       CLOUDDNS_ZONE: example-com
       LE_EMAIL: ops@example.com
@@ -32,11 +32,7 @@ services:
       DATA_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       RENEW_BEFORE_DAYS: "30"
       LOG_LEVEL: debug
-      # Set these for real issuance:
-      # GCE_PROJECT: your-gcp-project
-      # GCP_SERVICE_ACCOUNT_JSON: '{...}'
-      # DOMAIN_CATALOG: '[{"pattern":"*.example.com","zone":"example-com"}]'
-      # API_CLIENTS: '[{"id":"admin","key":"...","role":"admin"},{"id":"app","key":"...","role":"tenant","patterns":["app.example.com"]}]'
+      # GCE_PROJECT / GCP_SERVICE_ACCOUNT_JSON for real issuance
     depends_on:
       db:
         condition: service_healthy

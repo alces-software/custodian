@@ -35,14 +35,18 @@ func NewService(st *store.Store, issuer *Issuer, box *sealer.Box, catalog *domai
 
 // IssueRequest is the input for issuing a certificate.
 type IssueRequest struct {
-	CommonName string
-	SANs       []string
-	Force      bool
-	Actor      string
+	CommonName  string
+	SANs        []string
+	Force       bool
+	Actor       string
+	AccessKeyID uuid.UUID
 }
 
 // Issue obtains a certificate (or returns an existing valid one unless Force).
 func (s *Service) Issue(ctx context.Context, req IssueRequest) (*store.Certificate, bool, error) {
+	if req.AccessKeyID == uuid.Nil {
+		return nil, false, fmt.Errorf("access_key_id is required")
+	}
 	ns, err := s.catalog.ValidateNames(req.CommonName, req.SANs)
 	if err != nil {
 		return nil, false, err
@@ -53,7 +57,10 @@ func (s *Service) Issue(ctx context.Context, req IssueRequest) (*store.Certifica
 	if !req.Force {
 		existing, err := s.store.FindActiveByNames(ctx, cn, sans)
 		if err == nil && existing.NotAfter != nil && existing.NotAfter.After(time.Now().UTC().Add(s.renewBefore)) {
-			return existing, false, nil
+			// Only return existing if owned by same access key (or leave for admin force).
+			if existing.AccessKeyID != nil && *existing.AccessKeyID == req.AccessKeyID {
+				return existing, false, nil
+			}
 		}
 		if err != nil && err != store.ErrNotFound {
 			return nil, false, err
@@ -70,11 +77,13 @@ func (s *Service) Issue(ctx context.Context, req IssueRequest) (*store.Certifica
 	if !req.Force {
 		existing, err := s.store.FindActiveByNames(ctx, cn, sans)
 		if err == nil && existing.NotAfter != nil && existing.NotAfter.After(time.Now().UTC().Add(s.renewBefore)) {
-			return existing, false, nil
+			if existing.AccessKeyID != nil && *existing.AccessKeyID == req.AccessKeyID {
+				return existing, false, nil
+			}
 		}
 	}
 
-	certRow, err := s.store.CreateCertificate(ctx, cn, sans, ns.Zone)
+	certRow, err := s.store.CreateCertificate(ctx, cn, sans, ns.Zone, req.AccessKeyID)
 	if err != nil {
 		return nil, false, err
 	}

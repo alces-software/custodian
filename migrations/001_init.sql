@@ -11,6 +11,15 @@ CREATE TABLE le_accounts (
     UNIQUE (directory_url)
 );
 
+CREATE TABLE access_keys (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key_hash    TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by  TEXT NOT NULL DEFAULT '',
+    revoked_at  TIMESTAMPTZ
+);
+
 CREATE TABLE certificates (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     common_name      TEXT NOT NULL,
@@ -24,6 +33,7 @@ CREATE TABLE certificates (
     serial           TEXT,
     issuer           TEXT,
     dns_zone         TEXT,
+    access_key_id    UUID REFERENCES access_keys(id),
     acme_order_url   TEXT,
     last_error       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -3,7 +3,8 @@
 set -euo pipefail
 
 : "${CUSTODIAN_URL:?set CUSTODIAN_URL}"
-: "${CUSTODIAN_API_KEY:?set CUSTODIAN_API_KEY}"
+# Client access key (registered via POST /v1/access-keys)
+: "${ACCESS_KEY:?set ACCESS_KEY}"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <common_name> [san...]" >&2
@@ -21,7 +22,7 @@ body=$(jq -n --arg cn "$cn" --argjson sans "$sans_json" \
   '{common_name:$cn, sans:$sans, force:false}')
 
 curl -fsS -X POST \
-  -H "Authorization: Bearer ${CUSTODIAN_API_KEY}" \
+  -H "Authorization: Bearer ${ACCESS_KEY}" \
   -H "Content-Type: application/json" \
   -d "$body" \
   "${CUSTODIAN_URL%/}/v1/certificates"

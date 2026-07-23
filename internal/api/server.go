@@ -22,16 +22,16 @@ import (
 type Server struct {
 	store *store.Store
 	svc   *acme.Service
-	authz *authz.Registry
+	auth  *authz.Authenticator
 	log   *slog.Logger
 }
 
 // New constructs the API server.
-func New(st *store.Store, svc *acme.Service, reg *authz.Registry, log *slog.Logger) *Server {
+func New(st *store.Store, svc *acme.Service, auth *authz.Authenticator, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, svc: svc, authz: reg, log: log}
+	return &Server{store: st, svc: svc, auth: auth, log: log}
 }
 
 // Handler returns the root HTTP handler.
@@ -46,7 +46,12 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/readyz", s.handleReadyz)
 
 	r.Group(func(r chi.Router) {
-		r.Use(s.requireAPIKey)
+		r.Use(s.requireAuth)
+		r.Post("/v1/access-keys", s.handleRegisterAccessKey)
+		r.Get("/v1/access-keys", s.handleListAccessKeys)
+		r.Get("/v1/access-keys/{id}", s.handleGetAccessKey)
+		r.Delete("/v1/access-keys/{id}", s.handleRevokeAccessKey)
+
 		r.Post("/v1/certificates", s.handleIssue)
 		r.Get("/v1/certificates", s.handleList)
 		r.Get("/v1/certificates/{id}", s.handleGet)
@@ -69,12 +74,12 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 			"status", ww.Status(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", middleware.GetReqID(r.Context()),
-			"client_id", clientIDFrom(r.Context()),
+			"actor", actorLabel(r.Context()),
 		)
 	})
 }
 
-func (s *Server) requireAPIKey(next http.Handler) http.Handler {
+func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		const prefix = "Bearer "
@@ -83,28 +88,28 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
-		client, err := s.authz.Authenticate(token)
+		p, err := s.auth.Authenticate(r.Context(), token)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid API key")
 			return
 		}
-		ctx := context.WithValue(r.Context(), clientKey{}, client)
+		ctx := context.WithValue(r.Context(), principalKey{}, p)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-type clientKey struct{}
+type principalKey struct{}
 
-func clientFrom(ctx context.Context) *authz.Client {
-	if v, ok := ctx.Value(clientKey{}).(*authz.Client); ok {
+func principalFrom(ctx context.Context) *authz.Principal {
+	if v, ok := ctx.Value(principalKey{}).(*authz.Principal); ok {
 		return v
 	}
 	return nil
 }
 
-func clientIDFrom(ctx context.Context) string {
-	if c := clientFrom(ctx); c != nil {
-		return c.ID
+func actorLabel(ctx context.Context) string {
+	if p := principalFrom(ctx); p != nil {
+		return p.Label
 	}
 	return ""
 }
@@ -121,39 +126,167 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+// --- access keys ---
+
+type registerAccessKeyBody struct {
+	AccessKey   string `json:"access_key"`
+	Description string `json:"description"`
+}
+
+func (s *Server) handleRegisterAccessKey(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if !authz.CanRegisterAccessKey(p) {
+		writeError(w, http.StatusForbidden, "forbidden", "admin or registrar key required")
+		return
+	}
+	var body registerAccessKeyBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	ak, created, err := s.store.RegisterAccessKey(r.Context(), body.AccessKey, body.Description, string(p.Role))
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, "conflict", "access key was revoked; create a new key")
+			return
+		}
+		if strings.Contains(err.Error(), "access_key must") {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		s.log.Error("register access key", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "register failed")
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, accessKeyMeta(ak, created))
+}
+
+func (s *Server) handleListAccessKeys(w http.ResponseWriter, r *http.Request) {
+	if !authz.CanManageAccessKeys(principalFrom(r.Context())) {
+		writeError(w, http.StatusForbidden, "forbidden", "admin key required")
+		return
+	}
+	list, err := s.store.ListAccessKeys(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "list failed")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for i := range list {
+		out = append(out, accessKeyMeta(&list[i], false))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"access_keys": out})
+}
+
+func (s *Server) handleGetAccessKey(w http.ResponseWriter, r *http.Request) {
+	if !authz.CanManageAccessKeys(principalFrom(r.Context())) {
+		writeError(w, http.StatusForbidden, "forbidden", "admin key required")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	ak, err := s.store.GetAccessKeyByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "access key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", "get failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, accessKeyMeta(ak, false))
+}
+
+func (s *Server) handleRevokeAccessKey(w http.ResponseWriter, r *http.Request) {
+	if !authz.CanManageAccessKeys(principalFrom(r.Context())) {
+		writeError(w, http.StatusForbidden, "forbidden", "admin key required")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	if err := s.store.RevokeAccessKey(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "access key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", "revoke failed")
+		return
+	}
+	_ = s.store.InsertAudit(r.Context(), "access_key.revoke", nil, actorLabel(r.Context()), id.String())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func accessKeyMeta(ak *store.AccessKey, created bool) map[string]any {
+	m := map[string]any{
+		"id":          ak.ID.String(),
+		"description": ak.Description,
+		"created_at":  ak.CreatedAt,
+		"created_by":  ak.CreatedBy,
+		"revoked_at":  ak.RevokedAt,
+	}
+	if created {
+		m["created"] = true
+	} else {
+		m["created"] = false
+	}
+	if ak.CertCount > 0 || true {
+		m["cert_count"] = ak.CertCount
+	}
+	return m
+}
+
+// --- certificates ---
+
 type issueBody struct {
-	CommonName string   `json:"common_name"`
-	SANs       []string `json:"sans"`
-	Force      bool     `json:"force"`
+	CommonName  string   `json:"common_name"`
+	SANs        []string `json:"sans"`
+	Force       bool     `json:"force"`
+	AccessKey   string   `json:"access_key"`
+	AccessKeyID string   `json:"access_key_id"`
 }
 
 func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if !authz.CanIssueCertificates(p) {
+		writeError(w, http.StatusForbidden, "forbidden", "access key or admin required to issue certificates")
+		return
+	}
 	var body issueBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	client := clientFrom(r.Context())
-	// Pre-check scope on requested names (catalog validation happens in service).
-	names := append([]string{body.CommonName}, body.SANs...)
-	// Filter empty SANs for authz pre-check
-	clean := make([]string, 0, len(names))
-	for _, n := range names {
-		n = strings.TrimSpace(n)
-		if n != "" {
-			clean = append(clean, n)
+
+	accessKeyID, err := s.resolveIssueAccessKey(r.Context(), p, body)
+	if err != nil {
+		code := http.StatusBadRequest
+		errCode := "validation_error"
+		msg := err.Error()
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrRevoked) {
+			code = http.StatusBadRequest
+			errCode = "invalid_access_key"
+			msg = "access key not registered or revoked; POST /v1/access-keys first"
 		}
-	}
-	if len(clean) == 0 || !s.authz.CanAccessNames(client, clean) {
-		writeError(w, http.StatusForbidden, "forbidden", "key is not authorized for the requested domain(s)")
+		writeError(w, code, errCode, msg)
 		return
 	}
 
 	cert, created, err := s.svc.Issue(r.Context(), acme.IssueRequest{
-		CommonName: body.CommonName,
-		SANs:       body.SANs,
-		Force:      body.Force,
-		Actor:      client.ID,
+		CommonName:  body.CommonName,
+		SANs:        body.SANs,
+		Force:       body.Force,
+		Actor:       p.Label,
+		AccessKeyID: accessKeyID,
 	})
 	if err != nil {
 		s.writeIssueError(w, err)
@@ -166,18 +299,76 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, certToMeta(cert))
 }
 
+func (s *Server) resolveIssueAccessKey(ctx context.Context, p *authz.Principal, body issueBody) (uuid.UUID, error) {
+	if p.IsAccessKey() {
+		if body.AccessKey != "" {
+			hash := store.HashAccessKey(strings.TrimSpace(body.AccessKey))
+			ak, err := s.store.GetAccessKeyByHash(ctx, hash, true)
+			if err != nil {
+				return uuid.Nil, err
+			}
+			if ak.ID != p.AccessKeyID {
+				return uuid.Nil, fmtError("access_key in body does not match Authorization bearer")
+			}
+		}
+		if body.AccessKeyID != "" {
+			id, err := uuid.Parse(body.AccessKeyID)
+			if err != nil || id != p.AccessKeyID {
+				return uuid.Nil, fmtError("access_key_id does not match Authorization bearer")
+			}
+		}
+		return p.AccessKeyID, nil
+	}
+	// admin
+	if body.AccessKeyID != "" {
+		id, err := uuid.Parse(body.AccessKeyID)
+		if err != nil {
+			return uuid.Nil, fmtError("invalid access_key_id")
+		}
+		ak, err := s.store.GetActiveAccessKeyByID(ctx, id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		return ak.ID, nil
+	}
+	if body.AccessKey != "" {
+		hash := store.HashAccessKey(strings.TrimSpace(body.AccessKey))
+		ak, err := s.store.GetAccessKeyByHash(ctx, hash, true)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		return ak.ID, nil
+	}
+	return uuid.Nil, fmtError("admin issue requires access_key or access_key_id of a registered key")
+}
+
+type simpleError string
+
+func (e simpleError) Error() string { return string(e) }
+
+func fmtError(s string) error { return simpleError(s) }
+
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	client := clientFrom(r.Context())
-	certs, err := s.store.ListCertificates(r.Context())
+	p := principalFrom(r.Context())
+	if p.IsRegistrar() {
+		writeError(w, http.StatusForbidden, "forbidden", "registrar cannot list certificates")
+		return
+	}
+	var (
+		certs []store.Certificate
+		err   error
+	)
+	if p.IsAdmin() {
+		certs, err = s.store.ListCertificates(r.Context())
+	} else {
+		certs, err = s.store.ListCertificatesByAccessKey(r.Context(), p.AccessKeyID)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "list failed")
 		return
 	}
 	out := make([]certMeta, 0, len(certs))
 	for i := range certs {
-		if !s.authz.CanAccessCert(client, &certs[i]) {
-			continue
-		}
 		out = append(out, certToMeta(&certs[i]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"certificates": out})
@@ -236,8 +427,7 @@ func (s *Server) handleRenewOne(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	client := clientFrom(r.Context())
-	out, err := s.svc.RenewOne(r.Context(), cert.ID, client.ID)
+	out, err := s.svc.RenewOne(r.Context(), cert.ID, actorLabel(r.Context()))
 	if err != nil {
 		s.writeIssueError(w, err)
 		return
@@ -246,12 +436,11 @@ func (s *Server) handleRenewOne(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRenewDue(w http.ResponseWriter, r *http.Request) {
-	client := clientFrom(r.Context())
-	if !client.IsAdmin() {
+	if !authz.CanBulkRenew(principalFrom(r.Context())) {
 		writeError(w, http.StatusForbidden, "forbidden", "bulk renew requires an admin API key")
 		return
 	}
-	result, err := s.svc.RenewDue(r.Context(), client.ID)
+	result, err := s.svc.RenewDue(r.Context(), actorLabel(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -264,7 +453,6 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	client := clientFrom(r.Context())
 	if err := s.store.SoftDelete(r.Context(), cert.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "certificate not found")
@@ -274,12 +462,16 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := cert.ID
-	_ = s.store.InsertAudit(r.Context(), "delete", &id, client.ID, "")
+	_ = s.store.InsertAudit(r.Context(), "delete", &id, actorLabel(r.Context()), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// loadAuthorizedCert loads by id and returns 404 if missing or out of scope.
 func (s *Server) loadAuthorizedCert(w http.ResponseWriter, r *http.Request) (*store.Certificate, bool) {
+	p := principalFrom(r.Context())
+	if p.IsRegistrar() {
+		writeError(w, http.StatusForbidden, "forbidden", "registrar cannot access certificates")
+		return nil, false
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
@@ -294,7 +486,7 @@ func (s *Server) loadAuthorizedCert(w http.ResponseWriter, r *http.Request) (*st
 		writeError(w, http.StatusInternalServerError, "internal", "get failed")
 		return nil, false
 	}
-	if !s.authz.CanAccessCert(clientFrom(r.Context()), cert) {
+	if !authz.CanAccessCert(p, cert) {
 		writeError(w, http.StatusNotFound, "not_found", "certificate not found")
 		return nil, false
 	}
@@ -319,23 +511,24 @@ func (s *Server) writeIssueError(w http.ResponseWriter, err error) {
 }
 
 type certMeta struct {
-	ID         string     `json:"id"`
-	CommonName string     `json:"common_name"`
-	SANs       []string   `json:"sans"`
-	Status     string     `json:"status"`
-	DNSZone    string     `json:"dns_zone,omitempty"`
-	NotBefore  *time.Time `json:"not_before,omitempty"`
-	NotAfter   *time.Time `json:"not_after,omitempty"`
-	Serial     string     `json:"serial,omitempty"`
-	Issuer     string     `json:"issuer,omitempty"`
-	LastError  string     `json:"last_error,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	RenewedAt  *time.Time `json:"renewed_at,omitempty"`
+	ID          string     `json:"id"`
+	CommonName  string     `json:"common_name"`
+	SANs        []string   `json:"sans"`
+	Status      string     `json:"status"`
+	DNSZone     string     `json:"dns_zone,omitempty"`
+	AccessKeyID string     `json:"access_key_id,omitempty"`
+	NotBefore   *time.Time `json:"not_before,omitempty"`
+	NotAfter    *time.Time `json:"not_after,omitempty"`
+	Serial      string     `json:"serial,omitempty"`
+	Issuer      string     `json:"issuer,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	RenewedAt   *time.Time `json:"renewed_at,omitempty"`
 }
 
 func certToMeta(c *store.Certificate) certMeta {
-	return certMeta{
+	m := certMeta{
 		ID:         c.ID.String(),
 		CommonName: c.CommonName,
 		SANs:       c.SANs,
@@ -350,6 +543,10 @@ func certToMeta(c *store.Certificate) certMeta {
 		UpdatedAt:  c.UpdatedAt,
 		RenewedAt:  c.RenewedAt,
 	}
+	if c.AccessKeyID != nil {
+		m.AccessKeyID = c.AccessKeyID.String()
+	}
+	return m
 }
 
 type errorBody struct {

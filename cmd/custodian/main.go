@@ -14,6 +14,7 @@ import (
 
 	"github.com/markt/custodian/internal/acme"
 	"github.com/markt/custodian/internal/api"
+	"github.com/markt/custodian/internal/authz"
 	"github.com/markt/custodian/internal/config"
 	"github.com/markt/custodian/internal/crypto"
 	"github.com/markt/custodian/internal/store"
@@ -28,7 +29,7 @@ func main() {
 	case "serve":
 		serveCmd(os.Args[2:])
 	case "version":
-		fmt.Println("custodian 0.2.0")
+		fmt.Println("custodian 0.3.0")
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -48,6 +49,10 @@ func serveCmd(args []string) {
 	log := newLogger(cfg.LogLevel)
 	ctx := context.Background()
 
+	if cfg.WarnAPIClientsSet {
+		log.Warn("API_CLIENTS is deprecated and ignored; use client-held access keys via POST /v1/access-keys")
+	}
+
 	st, err := store.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Error("database", "err", err)
@@ -61,8 +66,13 @@ func serveCmd(args []string) {
 		os.Exit(1)
 	}
 
-	if !cfg.Authz.HasAdmin() {
-		log.Warn("no admin API client configured; POST /v1/renew (cron) will be forbidden for all keys")
+	authn, err := authz.NewAuthenticator(cfg.AdminAPIKeys, cfg.RegistrarAPIKeys, st)
+	if err != nil {
+		log.Error("auth", "err", err)
+		os.Exit(1)
+	}
+	if !authn.HasRegistrar() {
+		log.Warn("REGISTRAR_API_KEYS is empty; only admin can register access keys")
 	}
 
 	issuer := acme.NewIssuer(acme.Config{
@@ -74,7 +84,7 @@ func serveCmd(args []string) {
 	}, st, box)
 
 	svc := acme.NewService(st, issuer, box, cfg.Catalog, cfg.RenewBeforeDays)
-	srv := api.New(st, svc, cfg.Authz, log)
+	srv := api.New(st, svc, authn, log)
 
 	addr := ":" + cfg.Port
 	httpServer := &http.Server{
@@ -82,9 +92,8 @@ func serveCmd(args []string) {
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		// ACME can take several minutes for DNS propagation
-		WriteTimeout: 10 * time.Minute,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout:      10 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	patterns := cfg.Catalog.Patterns()
@@ -94,7 +103,7 @@ func serveCmd(args []string) {
 			"le_directory", cfg.LEDirectory,
 			"staging", cfg.IsStaging(),
 			"catalog_patterns", strings.Join(patterns, ","),
-			"has_admin_client", cfg.Authz.HasAdmin(),
+			"has_registrar", authn.HasRegistrar(),
 		)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server", "err", err)

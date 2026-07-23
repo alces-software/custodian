@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/markt/custodian/internal/authz"
 	"github.com/markt/custodian/internal/domains"
 )
 
@@ -19,18 +18,9 @@ const (
 	DirectoryProduction = "https://acme-v02.api.letsencrypt.org/directory"
 )
 
-// catalogJSONEntry is the JSON shape for DOMAIN_CATALOG.
 type catalogJSONEntry struct {
 	Pattern string `json:"pattern"`
 	Zone    string `json:"zone"`
-}
-
-// clientJSON is the JSON shape for API_CLIENTS.
-type clientJSON struct {
-	ID       string   `json:"id"`
-	Key      string   `json:"key"`
-	Role     string   `json:"role"`
-	Patterns []string `json:"patterns"`
 }
 
 // Config holds runtime configuration loaded from the environment.
@@ -38,7 +28,8 @@ type Config struct {
 	Port                  string
 	DatabaseURL           string
 	Catalog               *domains.Catalog
-	Authz                 *authz.Registry
+	AdminAPIKeys          []string
+	RegistrarAPIKeys      []string
 	LEEmail               string
 	LEDirectory           string
 	DataEncryptionKey     []byte
@@ -48,6 +39,7 @@ type Config struct {
 	RenewBeforeDays       int
 	LogLevel              string
 	MaxSANs               int
+	WarnAPIClientsSet     bool
 }
 
 // Load reads configuration from environment variables.
@@ -61,6 +53,7 @@ func Load() (*Config, error) {
 		LogLevel:              envOr("LOG_LEVEL", "info"),
 		MaxSANs:               envInt("MAX_SANS", 10),
 		RenewBeforeDays:       envInt("RENEW_BEFORE_DAYS", 30),
+		WarnAPIClientsSet:     os.Getenv("API_CLIENTS") != "" || os.Getenv("API_CLIENTS_FILE") != "",
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -100,7 +93,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RENEW_BEFORE_DAYS must be >= 1")
 	}
 
-	entries, err := loadDomainCatalog(cfg.MaxSANs)
+	entries, err := loadDomainCatalog()
 	if err != nil {
 		return nil, err
 	}
@@ -110,21 +103,17 @@ func Load() (*Config, error) {
 	}
 	cfg.Catalog = catalog
 
-	clients, err := loadAPIClients()
-	if err != nil {
-		return nil, err
+	// Admin keys: ADMIN_API_KEYS preferred; legacy API_KEYS
+	cfg.AdminAPIKeys = splitCSV(firstNonEmpty(os.Getenv("ADMIN_API_KEYS"), os.Getenv("API_KEYS")))
+	if len(cfg.AdminAPIKeys) == 0 {
+		return nil, fmt.Errorf("ADMIN_API_KEYS (or legacy API_KEYS) is required")
 	}
-	reg, err := authz.NewRegistry(clients, catalog)
-	if err != nil {
-		return nil, fmt.Errorf("API clients: %w", err)
-	}
-	cfg.Authz = reg
+	cfg.RegistrarAPIKeys = splitCSV(os.Getenv("REGISTRAR_API_KEYS"))
 
 	return cfg, nil
 }
 
-func loadDomainCatalog(maxSANs int) ([]domains.Entry, error) {
-	_ = maxSANs
+func loadDomainCatalog() ([]domains.Entry, error) {
 	raw := firstNonEmpty(os.Getenv("DOMAIN_CATALOG"), readFileEnv("DOMAIN_CATALOG_FILE"))
 	if raw != "" {
 		var list []catalogJSONEntry
@@ -138,7 +127,6 @@ func loadDomainCatalog(maxSANs int) ([]domains.Entry, error) {
 		return out, nil
 	}
 
-	// Legacy: ALLOWED_DOMAINS + CLOUDDNS_ZONE
 	domainsCSV := splitCSV(os.Getenv("ALLOWED_DOMAINS"))
 	zone := strings.TrimSpace(os.Getenv("CLOUDDNS_ZONE"))
 	if len(domainsCSV) == 0 {
@@ -150,41 +138,6 @@ func loadDomainCatalog(maxSANs int) ([]domains.Entry, error) {
 	out := make([]domains.Entry, 0, len(domainsCSV))
 	for _, p := range domainsCSV {
 		out = append(out, domains.Entry{Pattern: p, Zone: zone})
-	}
-	return out, nil
-}
-
-func loadAPIClients() ([]authz.Client, error) {
-	raw := firstNonEmpty(os.Getenv("API_CLIENTS"), readFileEnv("API_CLIENTS_FILE"))
-	if raw != "" {
-		var list []clientJSON
-		if err := json.Unmarshal([]byte(raw), &list); err != nil {
-			return nil, fmt.Errorf("API_CLIENTS JSON: %w", err)
-		}
-		out := make([]authz.Client, 0, len(list))
-		for _, c := range list {
-			out = append(out, authz.Client{
-				ID:       c.ID,
-				Key:      c.Key,
-				Role:     c.Role,
-				Patterns: c.Patterns,
-			})
-		}
-		return out, nil
-	}
-
-	// Legacy: API_KEYS → admin clients
-	keys := splitCSV(os.Getenv("API_KEYS"))
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("API_CLIENTS (or legacy API_KEYS) is required")
-	}
-	out := make([]authz.Client, 0, len(keys))
-	for i, k := range keys {
-		out = append(out, authz.Client{
-			ID:   fmt.Sprintf("legacy-admin-%d", i+1),
-			Key:  k,
-			Role: authz.RoleAdmin,
-		})
 	}
 	return out, nil
 }

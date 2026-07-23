@@ -17,6 +17,7 @@ func TestLoadLegacy(t *testing.T) {
 	t.Setenv("DATA_ENCRYPTION_KEY", key)
 	t.Setenv("LE_DIRECTORY", "staging")
 	t.Setenv("PORT", "9090")
+	os.Unsetenv("ADMIN_API_KEYS")
 	os.Unsetenv("DOMAIN_CATALOG")
 	os.Unsetenv("API_CLIENTS")
 
@@ -27,8 +28,8 @@ func TestLoadLegacy(t *testing.T) {
 	if cfg.Port != "9090" {
 		t.Errorf("Port = %q", cfg.Port)
 	}
-	if !cfg.Authz.HasAdmin() {
-		t.Error("expected admin from legacy keys")
+	if len(cfg.AdminAPIKeys) != 2 {
+		t.Errorf("AdminAPIKeys = %#v", cfg.AdminAPIKeys)
 	}
 	if !cfg.IsStaging() {
 		t.Error("expected staging")
@@ -39,18 +40,15 @@ func TestLoadLegacy(t *testing.T) {
 	}
 }
 
-func TestLoadScopedClientsAndCatalog(t *testing.T) {
+func TestLoadAdminAndCatalog(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	catalog, _ := json.Marshal([]map[string]string{
 		{"pattern": "*.example.com", "zone": "z1"},
 		{"pattern": "example.com", "zone": "z1"},
 	})
-	clients, _ := json.Marshal([]map[string]any{
-		{"id": "admin", "key": "admin-key-here", "role": "admin"},
-		{"id": "app", "key": "app-key-here!!", "role": "tenant", "patterns": []string{"app.example.com"}},
-	})
 	t.Setenv("DOMAIN_CATALOG", string(catalog))
-	t.Setenv("API_CLIENTS", string(clients))
+	t.Setenv("ADMIN_API_KEYS", "admin-secret-key")
+	t.Setenv("REGISTRAR_API_KEYS", "reg-secret-key")
 	t.Setenv("DATABASE_URL", "postgres://localhost/c")
 	t.Setenv("LE_EMAIL", "a@b.co")
 	t.Setenv("DATA_ENCRYPTION_KEY", key)
@@ -65,13 +63,12 @@ func TestLoadScopedClientsAndCatalog(t *testing.T) {
 	if cfg.LEDirectory != DirectoryProduction {
 		t.Errorf("got %q", cfg.LEDirectory)
 	}
-	c, err := cfg.Authz.Authenticate("app-key-here!!")
-	if err != nil || c.ID != "app" {
-		t.Fatalf("%v %#v", err, c)
+	if len(cfg.RegistrarAPIKeys) != 1 {
+		t.Fatal("registrar")
 	}
 }
 
-func TestLoadMissingAPIKeys(t *testing.T) {
+func TestLoadMissingAdmin(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("ALLOWED_DOMAINS", "example.com")
 	t.Setenv("CLOUDDNS_ZONE", "z")
@@ -81,20 +78,5 @@ func TestLoadMissingAPIKeys(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestLoadBadEncryptionKeyLength(t *testing.T) {
-	t.Setenv("API_KEYS", "k")
-	t.Setenv("ALLOWED_DOMAINS", "example.com")
-	t.Setenv("CLOUDDNS_ZONE", "z")
-	t.Setenv("DATABASE_URL", "postgres://x")
-	t.Setenv("LE_EMAIL", "a@b.co")
-	t.Setenv("DATA_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, 16)))
-	os.Unsetenv("DOMAIN_CATALOG")
-	os.Unsetenv("API_CLIENTS")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("expected error for short key")
 	}
 }

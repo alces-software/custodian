@@ -84,7 +84,7 @@ Schedule daily (Dokku cron, system cron, or Cloud Scheduler HTTP). Certs with `n
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PORT` | no | Default `8080` |
+| `PORT` | no | Listen port. Dokku sets this; default `8080` only for local runs |
 | `DATABASE_URL` | yes | Postgres URL |
 | `API_KEYS` | yes | Comma-separated bearer tokens |
 | `ALLOWED_DOMAINS` | yes | Patterns: `example.com,*.apps.example.com` |
@@ -130,6 +130,21 @@ dokku config:set custodian \
 
 # daily renew (example host cron)
 # 0 4 * * * curl -fsS -X POST -H "Authorization: Bearer $KEY" https://custodian.example/v1/renew
+```
+
+### Ports
+
+Do **not** set `PORT=8080` in Dokku config or `EXPOSE 8080` in the image. Dokku injects `PORT` and should proxy:
+
+- `http:80 → $PORT`
+- `https:443 → $PORT`
+
+If a previous deploy taught Dokku to use 8080 publicly, reset after redeploying this image:
+
+```bash
+dokku ports:report custodian
+dokku ports:set custodian http:80:5000 https:443:5000
+# use whatever container port Dokku assigned (see config:show PORT or ports:report)
 ```
 
 Use **staging** until DNS-01 works end-to-end, then set `LE_DIRECTORY=production`.

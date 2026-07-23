@@ -113,3 +113,11 @@ Scripts: `scripts/register-key.sh`, `scripts/issue.sh`, `scripts/renew.sh`.
 go test ./...
 go build -o bin/custodian ./cmd/custodian
 ```
+
+## License
+
+Copyright (C) 2026-present Alces Software Ltd.
+
+Custodian is made available under the [Eclipse Public License 2.0](https://www.eclipse.org/legal/epl-2.0), or alternative license terms made available by Alces Software Ltd. Licensing inquiries: licensing@alces-flight.com.
+
+Project: https://github.com/alces-software/custodian

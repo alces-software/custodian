@@ -25,20 +25,38 @@
 # https://github.com/alces-software/custodian
 # ==============================================================================
 
-# Build
+# --- CLI binaries (served at /cli/*) ---
+FROM golang:1.26-bookworm AS cli
+WORKDIR /cli
+COPY cli/go.mod cli/go.sum ./
+RUN go mod download
+COPY cli/ ./
+# Explicit targets only — avoid shell $1/$$ escaping traps under Docker/Dokku
+# ($$1 was expanded as PID+"1" → GOOS=11 GOARCH=12).
+RUN set -eux; \
+    mkdir -p /out; \
+    CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/custodian-linux-amd64  ./cmd/custodian; \
+    CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o /out/custodian-linux-arm64  ./cmd/custodian; \
+    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/custodian-darwin-amd64 ./cmd/custodian; \
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o /out/custodian-darwin-arm64 ./cmd/custodian; \
+    cp /out/custodian-linux-amd64 /out/custodian; \
+    (cd /out && sha256sum custodian custodian-linux-* custodian-darwin-* > SHA256SUMS)
+
+# --- Server ---
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/custodian ./cmd/custodian
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/custodian-server ./cmd/custodian
 
-# Run
+# --- Run ---
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
-COPY --from=build /out/custodian /app/custodian
+COPY --from=build /out/custodian-server /app/custodian
+COPY --from=cli /out/ /app/cli/
 USER nonroot:nonroot
 # Do not EXPOSE a port or bake PORT here — Dokku injects PORT and maps
-# host http:80 / https:443 → container $PORT. Hardcoding EXPOSE 8080 makes
-# Dokku treat 8080 as the public proxy port instead of the usual 80/443 setup.
+# host http:80 / https:443 → container $PORT.
+ENV CLI_BINARIES_DIR=/app/cli
 ENTRYPOINT ["/app/custodian", "serve"]

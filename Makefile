@@ -25,7 +25,25 @@
 # https://github.com/alces-software/custodian
 # ==============================================================================
 
-.PHONY: test build run tidy
+.PHONY: test build run tidy sync-cli cli-binaries
+
+# Refresh vendored CLI source from sibling checkout (../custodian-cli).
+sync-cli:
+	rsync -a --delete \
+		--exclude '.git' --exclude 'bin' --exclude 'docs' \
+		../custodian-cli/ ./cli/
+
+# Cross-compile CLI into ./static/cli for local serve without Docker.
+cli-binaries: sync-cli
+	mkdir -p static/cli
+	cd cli && \
+	  for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	    GOOS=$${pair%/*} GOARCH=$${pair#*/} CGO_ENABLED=0 \
+	      go build -trimpath -ldflags="-s -w" \
+	        -o ../static/cli/custodian-$${pair%/*}-$${pair#*/} ./cmd/custodian; \
+	  done
+	cp static/cli/custodian-linux-amd64 static/cli/custodian
+	cd static/cli && sha256sum custodian custodian-* > SHA256SUMS
 
 test:
 	go test ./...
@@ -37,4 +55,4 @@ tidy:
 	go mod tidy
 
 run: build
-	./bin/custodian serve
+	CLI_BINARIES_DIR=$${CLI_BINARIES_DIR:-./static/cli} ./bin/custodian serve

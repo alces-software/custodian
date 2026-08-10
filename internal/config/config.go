@@ -66,6 +66,7 @@ type Config struct {
 	RenewBeforeDays       int
 	LogLevel              string
 	MaxSANs               int
+	CLIBinariesDir        string
 	WarnAPIClientsSet     bool
 }
 
@@ -80,6 +81,7 @@ func Load() (*Config, error) {
 		LogLevel:              envOr("LOG_LEVEL", "info"),
 		MaxSANs:               envInt("MAX_SANS", 10),
 		RenewBeforeDays:       envInt("RENEW_BEFORE_DAYS", 30),
+		CLIBinariesDir:        envOr("CLI_BINARIES_DIR", "/app/cli"),
 		WarnAPIClientsSet:     os.Getenv("API_CLIENTS") != "" || os.Getenv("API_CLIENTS_FILE") != "",
 	}
 

@@ -42,6 +42,7 @@ import (
 	"alces/custodian/internal/acme"
 	"alces/custodian/internal/api"
 	"alces/custodian/internal/authz"
+	"alces/custodian/internal/clihost"
 	"alces/custodian/internal/config"
 	"alces/custodian/internal/crypto"
 	"alces/custodian/internal/store"
@@ -111,7 +112,14 @@ func serveCmd(args []string) {
 	}, st, box)
 
 	svc := acme.NewService(st, issuer, box, cfg.Catalog, cfg.RenewBeforeDays)
-	srv := api.New(st, svc, authn, log)
+	cliHost := clihost.New(cfg.CLIBinariesDir)
+	if cliHost.Enabled() {
+		if st, err := os.Stat(cfg.CLIBinariesDir); err != nil || !st.IsDir() {
+			log.Warn("CLI_BINARIES_DIR not found; /cli downloads disabled", "dir", cfg.CLIBinariesDir, "err", err)
+			cliHost = clihost.New("")
+		}
+	}
+	srv := api.New(st, svc, authn, cliHost, log)
 
 	addr := ":" + cfg.Port
 	httpServer := &http.Server{
@@ -131,6 +139,8 @@ func serveCmd(args []string) {
 			"staging", cfg.IsStaging(),
 			"catalog_patterns", strings.Join(patterns, ","),
 			"has_registrar", authn.HasRegistrar(),
+			"cli_binaries", cfg.CLIBinariesDir,
+			"cli_downloads", cliHost.Enabled(),
 		)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("server", "err", err)

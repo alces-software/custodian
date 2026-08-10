@@ -40,6 +40,30 @@ curl -fsS -X POST -H "Authorization: Bearer $ADMIN_KEY" "$URL/v1/renew"
 - Access keys with **description**, soft **revoke** (admin)
 - Encrypted private keys at rest (AES-256-GCM)
 - LE staging by default
+- **CLI downloads** at `/cli/*` (no auth) for bootstrap/`wget`
+
+## CLI downloads
+
+The server image embeds multi-arch builds of [custodian-cli](https://github.com/alces-software/custodian-cli) (vendored under `cli/`). Public routes:
+
+| URL | File |
+|-----|------|
+| `GET /cli` | Index of available binaries |
+| `GET /cli/custodian` | **linux/amd64** default (for servers) |
+| `GET /cli/custodian-linux-amd64` | linux/amd64 |
+| `GET /cli/custodian-linux-arm64` | linux/arm64 |
+| `GET /cli/custodian-darwin-amd64` | macOS Intel |
+| `GET /cli/custodian-darwin-arm64` | macOS Apple Silicon |
+| `GET /cli/SHA256SUMS` | Checksums |
+
+```bash
+wget -O custodian https://custodian.example/cli/custodian
+chmod +x custodian
+./custodian --help
+```
+
+Local without Docker: `make cli-binaries` then `CLI_BINARIES_DIR=./static/cli make run`.  
+Refresh vendored CLI source: `make sync-cli` (from sibling `../custodian-cli`).
 
 ## API
 
@@ -83,6 +107,7 @@ Admin issue on behalf of a key:
 | `GCE_PROJECT` | for issue | GCP project |
 | `GCP_SERVICE_ACCOUNT_JSON` | or ADC | Cloud DNS credentials |
 | `PORT` | no | Default 8080 locally; Dokku injects |
+| `CLI_BINARIES_DIR` | no | Directory of CLI binaries for `/cli` (default `/app/cli` in the image) |
 
 `API_CLIENTS` is **removed** (ignored with a warning if set).
 

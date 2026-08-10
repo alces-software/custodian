@@ -42,23 +42,28 @@ import (
 
 	"alces/custodian/internal/acme"
 	"alces/custodian/internal/authz"
+	"alces/custodian/internal/clihost"
 	"alces/custodian/internal/store"
 )
 
 // Server is the HTTP API.
 type Server struct {
-	store *store.Store
-	svc   *acme.Service
-	auth  *authz.Authenticator
-	log   *slog.Logger
+	store   *store.Store
+	svc     *acme.Service
+	auth    *authz.Authenticator
+	cliHost *clihost.Host
+	log     *slog.Logger
 }
 
 // New constructs the API server.
-func New(st *store.Store, svc *acme.Service, auth *authz.Authenticator, log *slog.Logger) *Server {
+func New(st *store.Store, svc *acme.Service, auth *authz.Authenticator, cli *clihost.Host, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, svc: svc, auth: auth, log: log}
+	if cli == nil {
+		cli = clihost.New("")
+	}
+	return &Server{store: st, svc: svc, auth: auth, cliHost: cli, log: log}
 }
 
 // Handler returns the root HTTP handler.
@@ -71,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 
 	r.Get("/healthz", s.handleHealthz)
 	r.Get("/readyz", s.handleReadyz)
+
+	// Public CLI binary downloads (no auth) for bootstrap/install scripts.
+	s.cliHost.Mount(r)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
